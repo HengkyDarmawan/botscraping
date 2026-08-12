@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block title %}Hasil & Download{% endblock %}
+{% block page_title %}<i class="bi bi-table me-2"></i>Hasil & Download{% endblock %}
+
+{% block content %}
+{% if files %}
+<div class="row g-3">
+  {% for f in files %}
+  <div class="col-12">
+    <div class="file-item">
+      <div class="file-icon
+        {% if f.type == 'gmaps' %}file-type-gmaps
+        {% elif f.type == 'pricing' %}file-type-pricing
+        {% elif f.type == 'social' %}file-type-social
+        {% else %}text-secondary{% endif %}">
+        <i class="bi bi-file-earmark-excel-fill"></i>
+      </div>
+      <div class="flex-grow-1">
+        <div class="d-flex align-items-center gap-2 mb-1">
+          <strong>{{ f.name }}</strong>
+          {% if f.type == 'gmaps' %}
+            <span class="badge badge-gmaps">Google Maps</span>
+          {% elif f.type == 'pricing' %}
+            <span class="badge badge-pricing">Price Comparison</span>
+          {% elif f.type == 'social' %}
+            <span class="badge" style="background:#f3e5f5;color:#6a1b9a">Social Media</span>
+          {% endif %}
+        </div>
+        <div class="d-flex gap-3">
+          <small class="text-muted"><i class="bi bi-table me-1"></i>{{ f.rows }} baris</small>
+          <small class="text-muted"><i class="bi bi-hdd me-1"></i>{{ f.size }}</small>
+          <small class="text-muted"><i class="bi bi-clock me-1"></i>{{ f.date }}</small>
+          {% if f.cols %}
+          <small class="text-muted"><i class="bi bi-columns me-1"></i>
+            {{ f.cols | join(', ') }}{% if f.cols|length == 6 %}...{% endif %}
+          </small>
+          {% endif %}
+        </div>
+      </div>
+      <div class="d-flex gap-2">
+        <button class="btn btn-outline-primary btn-sm" onclick="showPreview('{{ f.name }}')">
+          <i class="bi bi-eye me-1"></i>Preview
+        </button>
+        <a href="/download/{{ f.name }}" class="btn btn-success btn-sm">
+          <i class="bi bi-download me-1"></i>Download
+        </a>
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<div class="text-center py-5 text-muted">
+  <i class="bi bi-inbox" style="font-size:4rem"></i>
+  <h5 class="mt-3">Belum ada file hasil scraping</h5>
+  <p>Mulai dengan menggunakan salah satu scraper di menu kiri.</p>
+  <a href="/gmaps" class="btn btn-scrape me-2">Google Maps</a>
+  <a href="/pricing" class="btn btn-outline-primary me-2">Price Comparison</a>
+  <a href="/social" class="btn btn-outline-secondary">Social Media</a>
+</div>
+{% endif %}
+{% endblock %}

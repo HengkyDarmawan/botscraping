@@ -1,0 +1,298 @@
+{% extends "base.html" %}
+{% block title %}Database Leads{% endblock %}
+{% block page_title %}<i class="bi bi-person-lines-fill text-primary me-2"></i>Database Leads{% endblock %}
+
+{% macro qs(hal) -%}
+?hal={{ hal }}{% for k, v in args.items() %}{% if k != 'hal' %}&{{ k }}={{ v }}{% endif %}{% endfor %}
+{%- endmacro %}
+
+{% block content %}
+
+<!-- Ringkasan -->
+<div class="row g-3 mb-4">
+  {% for label, nilai, warna in [
+      ('Total Lead', stats.total, '#3498db'),
+      ('PANAS 🔥', stats.per_tier.get('PANAS', 0), '#e74c3c'),
+      ('Belum Dihubungi', stats.belum_dihubungi, '#f39c12'),
+      ('Follow Up Hari Ini', stats.follow_up_hari_ini, '#16a085')] %}
+  <div class="col-6 col-lg-3">
+    <div class="stat-card" style="border-left-color: {{ warna }}">
+      <div class="stat-num">{{ nilai }}</div>
+      <div class="stat-label">{{ label }}</div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+<!-- Filter -->
+<div class="card mb-3">
+  <div class="card-body py-3">
+    <form method="get" class="row g-2 align-items-end">
+      <div class="col-6 col-md-3">
+        <label class="form-label mb-1">Cari nama / alamat</label>
+        <input type="text" name="q" class="form-control form-control-sm"
+               value="{{ filters.q or '' }}" placeholder="mis. klinik">
+      </div>
+      <div class="col-6 col-md-2">
+        <label class="form-label mb-1">Tier</label>
+        <select name="tier" class="form-select form-select-sm">
+          <option value="">Semua</option>
+          {% for t in opsi_tier %}
+          <option value="{{ t }}" {% if filters.tier == t %}selected{% endif %}>{{ t }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-6 col-md-3">
+        <label class="form-label mb-1">Jasa yang cocok</label>
+        <select name="jasa" class="form-select form-select-sm">
+          <option value="">Semua</option>
+          {% for j in opsi_jasa %}
+          <option value="{{ j }}" {% if filters.jasa_utama == j %}selected{% endif %}>{{ j }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-6 col-md-2">
+        <label class="form-label mb-1">Area</label>
+        <select name="area" class="form-select form-select-sm">
+          <option value="">Semua</option>
+          {% for a in opsi_area %}
+          <option value="{{ a }}" {% if filters.area == a %}selected{% endif %}>{{ a }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-6 col-md-2">
+        <label class="form-label mb-1">Status</label>
+        <select name="status" class="form-select form-select-sm">
+          <option value="">Semua</option>
+          {% for s in opsi_status %}
+          <option value="{{ s }}" {% if filters.status_leads == s %}selected{% endif %}>{{ s }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-6 col-md-2">
+        <label class="form-label mb-1">Skor minimal</label>
+        <input type="number" name="skor_min" class="form-control form-control-sm"
+               value="{{ filters.skor_min if filters.skor_min is not none else '' }}"
+               min="0" max="100" placeholder="0">
+      </div>
+      <div class="col-6 col-md-2">
+        <label class="form-label mb-1">Urutkan</label>
+        <select name="urut" class="form-select form-select-sm">
+          <option value="skor_pembeli" {% if filters.urut == 'skor_pembeli' %}selected{% endif %}>Skor pembeli</option>
+          <option value="ulasan" {% if filters.urut == 'ulasan' %}selected{% endif %}>Jumlah ulasan</option>
+          <option value="rating" {% if filters.urut == 'rating' %}selected{% endif %}>Rating</option>
+          <option value="terbaru" {% if filters.urut == 'terbaru' %}selected{% endif %}>Terbaru</option>
+          <option value="nama" {% if filters.urut == 'nama' %}selected{% endif %}>Nama A-Z</option>
+        </select>
+      </div>
+      <div class="col-6 col-md-3 d-flex align-items-center pt-3">
+        <div class="form-check form-switch">
+          <input class="form-check-input" type="checkbox" name="wa" value="1"
+                 id="filterWa" {% if filters.punya_wa %}checked{% endif %}>
+          <label class="form-check-label" for="filterWa" style="font-size:.85rem">Hanya yang punya WhatsApp</label>
+        </div>
+      </div>
+      <div class="col-12 col-md-5 d-flex gap-2 justify-content-md-end">
+        <button type="submit" class="btn btn-primary btn-sm">
+          <i class="bi bi-funnel me-1"></i>Terapkan
+        </button>
+        <a href="/leads" class="btn btn-outline-secondary btn-sm">Reset</a>
+        <a href="/leads/export{{ qs(1) }}" class="btn btn-success btn-sm">
+          <i class="bi bi-file-earmark-excel me-1"></i>Export Excel
+        </a>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- Tabel -->
+<div class="card">
+  <div class="card-header bg-white d-flex justify-content-between align-items-center">
+    <span><strong>{{ total }}</strong> lead cocok dengan filter</span>
+    <small class="text-muted">Halaman {{ halaman }} dari {{ total_halaman }}</small>
+  </div>
+  <div class="table-responsive">
+    <table class="table table-sm table-hover align-middle mb-0 table-results">
+      <thead>
+        <tr>
+          <th>Skor</th>
+          <th>Bisnis</th>
+          <th>Jasa yang Ditawarkan</th>
+          <th>Kontak</th>
+          <th style="min-width:170px">Status</th>
+          <th>Aksi</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for l in leads %}
+        <tr id="row-{{ loop.index }}">
+          <td class="text-center">
+            <div class="tier-badge tier-{{ l.tier or 'ARSIP' }}">{{ l.skor_pembeli or 0 }}</div>
+            <small class="text-muted" style="font-size:.65rem">{{ l.tier or '-' }}</small>
+          </td>
+          <td>
+            <div class="fw-semibold">{{ l.nama_bisnis or '-' }}</div>
+            <small class="text-muted">
+              {{ l.kategori or '-' }}
+              {% if l.rating %} · ⭐{{ l.rating }} ({{ l.jumlah_ulasan or 0 }}){% endif %}
+              {% if l.area_pencarian %} · {{ l.area_pencarian }}{% endif %}
+            </small>
+            {% if l.sudah_diklaim == 0 %}
+            <span class="badge bg-warning text-dark" style="font-size:.6rem">belum diklaim</span>
+            {% endif %}
+          </td>
+          <td style="max-width:320px">
+            <div class="fw-semibold text-primary" style="font-size:.82rem">{{ l.jasa_utama or '-' }}</div>
+            {% if l.alasan_pitch %}
+            <small class="text-muted d-block text-truncate" style="max-width:320px"
+                   title="{{ l.alasan_pitch }}">{{ l.alasan_pitch }}</small>
+            {% endif %}
+            {% if l.web_status and l.web_status != 'tidak_ada' %}
+            <small class="text-muted" style="font-size:.68rem">
+              web: {{ l.web_status }}{% if l.web_platform %} / {{ l.web_platform }}{% endif %}
+            </small>
+            {% elif l.web_status == 'tidak_ada' %}
+            <small class="text-danger" style="font-size:.68rem">tanpa website</small>
+            {% endif %}
+          </td>
+          <td style="font-size:.8rem">
+            {% if l.telepon %}<div><i class="bi bi-telephone me-1"></i>{{ l.telepon }}</div>{% endif %}
+            {% if l.email %}<div><i class="bi bi-envelope me-1"></i>{{ l.email }}</div>{% endif %}
+            {% if l.instagram %}<a href="{{ l.instagram }}" target="_blank"><i class="bi bi-instagram"></i></a>{% endif %}
+            {% if l.website %}<a href="{{ l.website }}" target="_blank" class="ms-1"><i class="bi bi-globe"></i></a>{% endif %}
+          </td>
+          <td>
+            <select class="form-select form-select-sm mb-1"
+                    onchange="simpanLead('{{ l.place_key }}', this, 'status_leads')">
+              {% for s in opsi_status %}
+              <option value="{{ s }}" {% if (l.status_leads or 'Belum Dihubungi') == s %}selected{% endif %}>{{ s }}</option>
+              {% endfor %}
+            </select>
+            <input type="date" class="form-control form-control-sm mb-1"
+                   value="{{ l.tanggal_follow_up or '' }}" title="Tanggal follow up"
+                   onchange="simpanLead('{{ l.place_key }}', this, 'tanggal_follow_up')">
+            <input type="text" class="form-control form-control-sm" placeholder="Catatan..."
+                   value="{{ l.catatan or '' }}"
+                   onchange="simpanLead('{{ l.place_key }}', this, 'catatan')">
+          </td>
+          <td class="text-nowrap">
+            {% if l.wa_pitch %}
+            <a href="{{ l.wa_pitch }}" target="_blank" class="btn btn-success btn-sm mb-1"
+               title="Buka WhatsApp dengan pesan pembuka sudah terisi">
+              <i class="bi bi-whatsapp"></i> Chat
+            </a>
+            {% endif %}
+            {% if l.source_url and l.source_url.startswith('http') %}
+            <a href="{{ l.source_url }}" target="_blank" class="btn btn-outline-secondary btn-sm mb-1"
+               title="Buka di Google Maps"><i class="bi bi-geo-alt"></i></a>
+            {% endif %}
+            <button class="btn btn-outline-primary btn-sm mb-1"
+                    onclick="lihatDetail('{{ l.place_key }}')" title="Detail"><i class="bi bi-eye"></i></button>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="6" class="text-center text-muted py-5">
+          Belum ada lead yang cocok. Jalankan
+          <a href="/gmaps">Google Maps Scraper</a> dulu, atau longgarkan filternya.
+        </td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if total_halaman > 1 %}
+  <div class="card-footer bg-white d-flex justify-content-between align-items-center">
+    <a href="{{ qs(halaman - 1) }}" class="btn btn-outline-secondary btn-sm {% if halaman <= 1 %}disabled{% endif %}">
+      <i class="bi bi-chevron-left"></i> Sebelumnya
+    </a>
+    <small class="text-muted">Halaman {{ halaman }} / {{ total_halaman }}</small>
+    <a href="{{ qs(halaman + 1) }}" class="btn btn-outline-secondary btn-sm {% if halaman >= total_halaman %}disabled{% endif %}">
+      Berikutnya <i class="bi bi-chevron-right"></i>
+    </a>
+  </div>
+  {% endif %}
+</div>
+
+<!-- Modal detail -->
+<div class="modal fade" id="detailModal" tabindex="-1">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header bg-primary text-white">
+        <h5 class="modal-title"><i class="bi bi-person-badge me-2"></i>Detail Lead</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body" id="detailBody">Memuat...</div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+const LABEL = {
+  skor_pembeli: 'Skor pembeli', tier: 'Tier', jasa_utama: 'Jasa utama',
+  jasa_pendukung: 'Jasa pendukung', alasan_pitch: 'Kalimat pembuka',
+  nama_bisnis: 'Nama', kategori: 'Kategori', alamat: 'Alamat',
+  telepon: 'Telepon', email: 'Email', website: 'Website',
+  web_status: 'Kondisi website', web_platform: 'Platform', web_https: 'HTTPS',
+  web_mobile: 'Ramah HP', web_load_ms: 'Kecepatan (ms)', web_ada_pixel: 'Pixel iklan',
+  web_tahun_update: 'Tahun update situs', sudah_diklaim: 'Listing diklaim',
+  rating: 'Rating', jumlah_ulasan: 'Jumlah ulasan', rentang_harga: 'Rentang harga',
+  first_seen_at: 'Pertama ditemukan', last_scraped_at: 'Terakhir di-scrape',
+  last_checked_at: 'Terakhir dicek', times_seen: 'Kali ditemukan',
+  area_pencarian: 'Area', instagram: 'Instagram', facebook: 'Facebook'
+};
+
+function simpanLead(placeKey, el, field) {
+  const body = { place_key: placeKey };
+  body[field] = el.value;
+  el.classList.add('border-warning');
+  fetch('/leads/update', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(body)
+  })
+  .then(r => r.json())
+  .then(d => {
+    el.classList.remove('border-warning');
+    el.classList.add(d.ok ? 'border-success' : 'border-danger');
+    setTimeout(() => el.classList.remove('border-success', 'border-danger'), 1200);
+  })
+  .catch(() => {
+    el.classList.remove('border-warning');
+    el.classList.add('border-danger');
+  });
+}
+
+function lihatDetail(placeKey) {
+  const modal = new bootstrap.Modal(document.getElementById('detailModal'));
+  const body = document.getElementById('detailBody');
+  body.innerHTML = '<div class="spinner-border text-primary"></div>';
+  modal.show();
+  fetch('/leads/detail/' + encodeURIComponent(placeKey))
+    .then(r => r.json())
+    .then(d => {
+      if (d.error) { body.innerHTML = `<p class="text-danger">${d.error}</p>`; return; }
+      let html = '<table class="table table-sm"><tbody>';
+      Object.keys(LABEL).forEach(k => {
+        let v = d[k];
+        if (v === null || v === undefined || v === '') return;
+        if (k === 'sudah_diklaim' || k === 'web_https' || k === 'web_mobile' || k === 'web_ada_pixel') {
+          v = v ? 'Ya' : 'Tidak';
+        }
+        html += `<tr><th style="width:38%">${LABEL[k]}</th><td>${escapeHtml(String(v))}</td></tr>`;
+      });
+      html += '</tbody></table>';
+      if (d.perubahan && d.perubahan.length) {
+        html += '<h6 class="mt-3 fw-bold">Riwayat Perubahan Kontak</h6>';
+        html += '<table class="table table-sm"><thead><tr><th>Tanggal</th><th>Field</th><th>Lama</th><th>Baru</th></tr></thead><tbody>';
+        d.perubahan.forEach(p => {
+          html += `<tr><td>${escapeHtml(p.changed_at)}</td><td>${escapeHtml(p.field)}</td>
+                   <td class="text-muted">${escapeHtml(p.nilai_lama || '-')}</td>
+                   <td class="fw-semibold">${escapeHtml(p.nilai_baru || '-')}</td></tr>`;
+        });
+        html += '</tbody></table>';
+      }
+      body.innerHTML = html;
+    });
+}
+</script>
+{% endblock %}

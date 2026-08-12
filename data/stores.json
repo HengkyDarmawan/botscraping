@@ -1,0 +1,51 @@
+[
+  {
+    "id": "tkp-logitech",
+    "platform": "tokopedia",
+    "nama": "Logitech Official Store",
+    "url": "https://www.tokopedia.com/logitech",
+    "username": "logitech"
+  },
+  {
+    "id": "tkp-asus",
+    "platform": "tokopedia",
+    "nama": "ASUS Official Store",
+    "url": "https://www.tokopedia.com/asus",
+    "username": "asus"
+  },
+  {
+    "id": "tkp-xiaomi",
+    "platform": "tokopedia",
+    "nama": "Xiaomi Official Store",
+    "url": "https://www.tokopedia.com/xiaomi",
+    "username": "xiaomi"
+  },
+  {
+    "id": "shp-logitech",
+    "platform": "shopee",
+    "nama": "Logitech Official Shop",
+    "url": "https://shopee.co.id/logitech.id",
+    "username": "logitech.id"
+  },
+  {
+    "id": "shp-xiaomi",
+    "platform": "shopee",
+    "nama": "Xiaomi Official Store",
+    "url": "https://shopee.co.id/xiaomi.official.store",
+    "username": "xiaomi.official.store"
+  },
+  {
+    "id": "sho-jayapc-655",
+    "platform": "shopee",
+    "nama": "jayapc",
+    "url": "https://shopee.co.id/jaya_pc?entryPoint=ShopBySearch&searchKeyword=jayapc",
+    "username": "jaya_pc"
+  },
+  {
+    "id": "tok-jayapc-444",
+    "platform": "tokopedia",
+    "nama": "jayapc",
+    "url": "https://www.tokopedia.com/jayapc",
+    "username": "jayapc"
+  }
+]

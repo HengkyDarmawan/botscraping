@@ -1,0 +1,477 @@
+{% extends "base.html" %}
+{% block title %}Google Maps Scraper{% endblock %}
+{% block page_title %}<i class="bi bi-geo-alt-fill text-success me-2"></i>Google Maps Scraper{% endblock %}
+
+{% block content %}
+<div class="row g-4">
+  <!-- Form -->
+  <div class="col-lg-5">
+    <div class="card">
+      <div class="card-header bg-success text-white">
+        <i class="bi bi-sliders me-2"></i>Konfigurasi Pencarian
+      </div>
+      <div class="card-body">
+
+        <!-- Target pencarian: 1 jenis bisnis × banyak wilayah -->
+        <div class="mb-3">
+          <label class="form-label">Target Pencarian <span class="text-danger">*</span></label>
+          <div id="targetList">
+            <div class="target-row mb-2">
+              <input type="text" class="form-control form-control-sm jenis-input mb-2"
+                     placeholder="Jenis bisnis (mis. Servis Komputer)" value="Servis Komputer">
+              <div class="wilayah-host"></div>
+              <div class="text-end mt-2">
+                <button class="btn btn-outline-danger btn-sm" onclick="removeTarget(this)">
+                  <i class="bi bi-trash"></i> Hapus baris
+                </button>
+              </div>
+            </div>
+          </div>
+          <button class="btn btn-outline-success btn-sm mt-1" onclick="addTarget()">
+            <i class="bi bi-plus-circle me-1"></i>Tambah Jenis Bisnis
+          </button>
+          <div class="form-text">
+            <i class="bi bi-info-circle me-1"></i>Satu baris = satu jenis bisnis dicari di
+            <strong>semua wilayah</strong> yang Anda pilih. Wilayah bertanda
+            <i class="bi bi-geo-alt-fill text-success"></i> punya koordinat, jadi pengaturan
+            Radius berlaku untuknya.
+          </div>
+        </div>
+
+        <!-- Filter -->
+        <div class="row g-2 mb-3">
+          <div class="col-6">
+            <label class="form-label">Max Hasil / Wilayah</label>
+            <input type="number" id="maxResults" class="form-control" value="20" min="1" max="120"
+                   oninput="hitungEstimasi()">
+            <div class="form-text" style="font-size:.72rem">
+              Feed Google Maps mentok ±120 per pencarian. Untuk hasil lebih banyak,
+              pilih per kecamatan.
+            </div>
+          </div>
+          <div class="col-6">
+            <label class="form-label">Radius (km)</label>
+            <input type="number" id="radiusKm" class="form-control" value="0" min="0" step="1">
+            <div class="form-text" style="font-size:.72rem">
+              0 = biarkan Google menentukan. Menggeser area tampilan peta,
+              bukan filter jarak presisi.
+            </div>
+          </div>
+          <div class="col-6">
+            <label class="form-label d-flex justify-content-between align-items-center">
+              <span>Min Rating ⭐</span>
+              <span class="form-check form-switch m-0">
+                <input class="form-check-input" type="checkbox" id="filterRating" checked
+                       onchange="document.getElementById('minRating').disabled = !this.checked; cekFilterKetat()">
+              </span>
+            </label>
+            <select id="minRating" class="form-select" onchange="cekFilterKetat()">
+              <option value="3">≥ 3.0</option>
+              <option value="3.5">≥ 3.5</option>
+              <option value="4" selected>≥ 4.0</option>
+              <option value="4.5">≥ 4.5</option>
+            </select>
+          </div>
+          <div class="col-6">
+            <label class="form-label d-flex justify-content-between align-items-center">
+              <span>Min Ulasan</span>
+              <span class="form-check form-switch m-0">
+                <input class="form-check-input" type="checkbox" id="filterReviews" checked
+                       onchange="document.getElementById('minReviews').disabled = !this.checked; cekFilterKetat()">
+              </span>
+            </label>
+            <input type="number" id="minReviews" class="form-control" value="5" min="0"
+                   onchange="cekFilterKetat()">
+          </div>
+          <div class="col-6">
+            <label class="form-label">Format Output</label>
+            <select id="outputFormat" class="form-select">
+              <option value="excel" selected>Excel (.xlsx)</option>
+              <option value="csv">CSV (.csv)</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Opsi tambahan — tiap filter bisa dinyalakan/dimatikan -->
+        <div class="mb-2">
+          <div class="form-check form-switch">
+            <input class="form-check-input" type="checkbox" id="requirePhone" checked onchange="cekFilterKetat()">
+            <label class="form-check-label" for="requirePhone">Wajib punya nomor telepon</label>
+          </div>
+          <div class="form-check form-switch mt-1">
+            <input class="form-check-input" type="checkbox" id="requireWhatsapp" checked onchange="cekFilterKetat()">
+            <label class="form-check-label" for="requireWhatsapp">Hanya nomor WhatsApp (HP seluler)</label>
+          </div>
+          <div class="form-check form-switch mt-1">
+            <input class="form-check-input" type="checkbox" id="requireNoWebsite" onchange="cekFilterKetat()">
+            <label class="form-check-label" for="requireNoWebsite">Hanya bisnis TANPA website</label>
+          </div>
+          <div class="form-check form-switch mt-1">
+            <input class="form-check-input" type="checkbox" id="sertakanTutup">
+            <label class="form-check-label" for="sertakanTutup">Sertakan bisnis yang sudah tutup</label>
+          </div>
+          <div class="form-check form-switch mt-1">
+            <input class="form-check-input" type="checkbox" id="headlessMode" checked>
+            <label class="form-check-label" for="headlessMode">Mode headless (browser tersembunyi)</label>
+          </div>
+        </div>
+        <div id="peringatanFilter" class="alert alert-warning py-2 px-3 mb-3 d-none"
+             style="font-size:.78rem"></div>
+
+        <!-- Anti-duplikat & enrichment -->
+        <div class="card bg-light border-0 mb-3">
+          <div class="card-body py-3">
+            <h6 class="fw-bold mb-2" style="font-size:.85rem">
+              <i class="bi bi-shield-check me-1 text-primary"></i>Anti-Duplikat & Analisa Lead
+            </h6>
+            <div class="form-check form-switch">
+              <input class="form-check-input" type="checkbox" id="dedupEnabled" checked
+                     onchange="toggleDedup(this)">
+              <label class="form-check-label" for="dedupEnabled">
+                Lewati bisnis yang sudah pernah di-scrape
+              </label>
+            </div>
+            <div id="dedupOpsi" class="ps-4 mt-2">
+              <div class="row g-2 align-items-center">
+                <div class="col-7"><label class="form-label mb-0" style="font-size:.8rem">Masa tenggang</label></div>
+                <div class="col-5">
+                  <div class="input-group input-group-sm">
+                    <input type="number" id="dedupBulan" class="form-control" value="6" min="1" max="36">
+                    <span class="input-group-text">bulan</span>
+                  </div>
+                </div>
+              </div>
+              <div class="form-check form-switch mt-2">
+                <input class="form-check-input" type="checkbox" id="refreshKontak" checked
+                       onchange="document.getElementById('refreshHari').disabled = !this.checked">
+                <label class="form-check-label" for="refreshKontak" style="font-size:.82rem">
+                  Tetap cek perubahan telepon / website lead lama
+                </label>
+              </div>
+              <div class="row g-2 align-items-center mt-1">
+                <div class="col-7"><label class="form-label mb-0" style="font-size:.8rem">Cek ulang tiap</label></div>
+                <div class="col-5">
+                  <div class="input-group input-group-sm">
+                    <input type="number" id="refreshHari" class="form-control" value="30" min="1" max="180">
+                    <span class="input-group-text">hari</span>
+                  </div>
+                </div>
+              </div>
+              <div class="form-text" style="font-size:.72rem">
+                Kalau nomor atau website-nya berubah, data di database diperbarui dan
+                lead itu muncul di sheet "Update Kontak".
+              </div>
+            </div>
+            <hr class="my-2">
+            <div class="form-check form-switch">
+              <input class="form-check-input" type="checkbox" id="enrichWebsite" checked
+                     onchange="hitungEstimasi()">
+              <label class="form-check-label" for="enrichWebsite">
+                Buka website tiap lead (analisa jasa)
+              </label>
+            </div>
+            <div class="form-text ps-4" style="font-size:.72rem">
+              Mengecek website mati/HTTPS/ramah HP/kecepatan/platform + memanen email &
+              sosmed. <strong>Ini yang menentukan rekomendasi jasa dan skor pembeli.</strong>
+              Menambah waktu sekitar 20-40%.
+            </div>
+          </div>
+        </div>
+
+        <!-- Proxy Apify -->
+        <div class="mb-3">
+          <a class="text-decoration-none small text-muted" data-bs-toggle="collapse" href="#proxySection">
+            <i class="bi bi-shield-lock me-1"></i>Proxy Apify (opsional)
+          </a>
+          <div class="collapse mt-2" id="proxySection">
+            <div class="form-check form-switch mb-2">
+              <input class="form-check-input" type="checkbox" id="useProxy">
+              <label class="form-check-label" for="useProxy">Aktifkan Proxy</label>
+            </div>
+            <label class="form-label small mb-1">Apify API Token</label>
+            <div class="input-group input-group-sm mb-1">
+              <input type="password" id="apifyToken" class="form-control font-monospace"
+                     placeholder="apify_api_...">
+              <button class="btn btn-outline-secondary" type="button" onclick="cekProxy(this)">
+                <i class="bi bi-plug-fill"></i> Tes
+              </button>
+            </div>
+            <div id="proxyStatus" class="mb-2"></div>
+            <div class="row g-1">
+              <div class="col">
+                <select id="apifyGroup" class="form-select form-select-sm">
+                  <option value="RESIDENTIAL" selected>RESIDENTIAL</option>
+                  <option value="DATACENTER">DATACENTER</option>
+                </select>
+              </div>
+              <div class="col">
+                <input type="text" id="apifyCountry" class="form-control form-control-sm"
+                       placeholder="Negara (ID)" value="ID">
+              </div>
+            </div>
+            <div class="form-text" style="font-size:.72rem">
+              Token dari apify.com → Settings → Integrations → API tokens.
+            </div>
+          </div>
+        </div>
+
+        <!-- Gemini AI tambahan -->
+        <hr class="my-3">
+        <div class="form-check mb-2">
+          <input class="form-check-input" type="checkbox" id="useGemini"
+            onchange="toggleGeminiSection(this, 'geminiKeySection')">
+          <label class="form-check-label" for="useGemini">
+            <i class="bi bi-stars text-warning me-1"></i>
+            <strong>Tambahkan Gemini AI Search</strong>
+            <span class="badge bg-warning text-dark ms-1" style="font-size:.65rem">bebas block</span>
+          </label>
+        </div>
+        <div id="geminiKeySection" class="ps-3 mb-3" style="display:none">
+          <label class="form-label small">Gemini API Key
+            <a href="https://aistudio.google.com/app/apikey" target="_blank"
+              class="ms-2 badge bg-warning text-dark text-decoration-none" style="font-size:.65rem">
+              <i class="bi bi-key-fill me-1"></i>Dapatkan GRATIS
+            </a>
+          </label>
+          <div class="input-group mb-1">
+            <input type="password" id="geminiApiKey" class="form-control form-control-sm font-monospace" placeholder="AIza...">
+            <button class="btn btn-outline-secondary btn-sm" type="button"
+              onclick="checkGeminiKey('geminiApiKey', 'geminiStatus', this)">
+              <i class="bi bi-plug-fill"></i> Cek
+            </button>
+          </div>
+          <div id="geminiStatus" class="mb-1"></div>
+          <div class="form-check form-switch mt-2">
+            <input class="form-check-input" type="checkbox" id="simpanGemini">
+            <label class="form-check-label" for="simpanGemini" style="font-size:.8rem">
+              Simpan hasil Gemini ke database
+            </label>
+          </div>
+          <div class="alert alert-warning py-2 px-2 mt-2 mb-0" style="font-size:.72rem">
+            <i class="bi bi-exclamation-triangle me-1"></i>Hasil Gemini ditulis ke
+            <strong>sheet terpisah</strong>. Model AI bisa mengarang nomor telepon —
+            verifikasi dulu sebelum dihubungi.
+          </div>
+        </div>
+
+        <div id="estimasi" class="text-center text-muted mb-2" style="font-size:.8rem"></div>
+        <button id="runBtn" class="btn btn-scrape w-100" onclick="runGmaps()">
+          <i class="bi bi-play-fill me-2"></i>Mulai Scraping
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Progress & log -->
+  <div class="col-lg-7">
+    <div class="card">
+      <div class="card-header bg-dark text-white d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-activity me-2"></i>Progress</span>
+        <div class="d-flex align-items-center gap-3">
+          <span>Ditemukan: <strong id="foundCount">0</strong> leads</span>
+          <span id="statusBadge" class="badge bg-secondary">Menunggu</span>
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="progress mb-3" style="height:14px">
+          <div id="progressBar" class="progress-bar progress-bar-striped progress-bar-animated" style="width:0%">0%</div>
+        </div>
+        <div class="log-console" id="scrapeLog">
+          <div class="text-muted">Tekan "Mulai Scraping" untuk memulai...</div>
+        </div>
+        <div class="mt-3 d-flex gap-2">
+          <a id="downloadBtn" href="#" class="btn btn-success d-none flex-grow-1">
+            <i class="bi bi-download me-2"></i>Download Hasil
+          </a>
+          <button id="stopBtn" class="btn btn-danger d-none flex-grow-1" onclick="stopJob()">
+            <i class="bi bi-stop-fill me-2"></i>Stop Scraping
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Info -->
+    <div class="card mt-3">
+      <div class="card-body">
+        <h6 class="fw-bold"><i class="bi bi-info-circle me-2 text-primary"></i>Data yang Diambil</h6>
+        <div class="row g-1">
+          {% for item in [('✅ Nama, Kategori, Alamat',''),('⭐ Rating & Ulasan',''),
+                          ('📞 Telepon + WhatsApp Link',''),('📧 Email dari website',''),
+                          ('🌐 Kondisi website','mati / HTTPS / mobile / kecepatan'),
+                          ('📱 Instagram & Facebook',''),
+                          ('🏷 Status klaim listing','sinyal jasa Google Business Profile'),
+                          ('🎯 Jasa yang cocok','web dev atau digital marketing'),
+                          ('💬 Kalimat pembuka','siap kirim WhatsApp'),
+                          ('🔥 Skor pembeli 0-100','PANAS / HANGAT / DINGIN / ARSIP')] %}
+          <div class="col-6"><small class="text-muted">{{ item[0] }} {% if item[1] %}<em>({{ item[1] }})</em>{% endif %}</small></div>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="/static/js/wilayah-picker.js"></script>
+<script>
+const pickers = [];
+
+function pasangPicker(row) {
+  const host = row.querySelector('.wilayah-host');
+  const p = new WilayahPicker(host);
+  host.addEventListener('wilayah-berubah', hitungEstimasi);
+  row.querySelector('.jenis-input').addEventListener('input', hitungEstimasi);
+  pickers.push({ row, picker: p });
+  return p;
+}
+
+function addTarget() {
+  const div = document.createElement('div');
+  div.className = 'target-row mb-2';
+  div.innerHTML = `
+    <input type="text" class="form-control form-control-sm jenis-input mb-2"
+           placeholder="Jenis bisnis (mis. Bengkel Mobil)">
+    <div class="wilayah-host"></div>
+    <div class="text-end mt-2">
+      <button class="btn btn-outline-danger btn-sm" onclick="removeTarget(this)">
+        <i class="bi bi-trash"></i> Hapus baris
+      </button>
+    </div>`;
+  document.getElementById('targetList').appendChild(div);
+  pasangPicker(div);
+  hitungEstimasi();
+}
+
+function removeTarget(btn) {
+  const rows = document.querySelectorAll('.target-row');
+  if (rows.length <= 1) return;
+  const row = btn.closest('.target-row');
+  const i = pickers.findIndex(p => p.row === row);
+  if (i >= 0) pickers.splice(i, 1);
+  row.remove();
+  hitungEstimasi();
+}
+
+/** 1 jenis bisnis × N wilayah → N target terpisah, format lama {jenis, area, coords}. */
+function kumpulkanTargets() {
+  const targets = [];
+  pickers.forEach(({ row, picker }) => {
+    const jenis = row.querySelector('.jenis-input').value.trim();
+    if (!jenis) return;
+    picker.nilai().forEach(w => targets.push({ jenis, area: w.area, coords: w.coords }));
+  });
+  return targets;
+}
+
+function hitungEstimasi() {
+  const n = kumpulkanTargets().length;
+  const max = parseInt(document.getElementById('maxResults').value) || 0;
+  const el = document.getElementById('estimasi');
+  if (!n || !max) { el.textContent = ''; return; }
+  let detik = n * max * 6 + n * 25;
+  if (document.getElementById('enrichWebsite').checked) detik *= 1.3;
+  const menit = Math.round(detik / 60);
+  el.innerHTML = `<i class="bi bi-clock me-1"></i>${n} pencarian × ${max} hasil — perkiraan
+    <strong>${menit < 1 ? '<1' : menit} menit</strong>`;
+}
+
+function toggleDedup(cb) {
+  document.getElementById('dedupOpsi').style.display = cb.checked ? '' : 'none';
+}
+
+/** Peringatkan sebelum dijalankan kalau kombinasi filter kemungkinan besar nihil. */
+function cekFilterKetat() {
+  const ketat = [];
+  if (document.getElementById('requireNoWebsite').checked) ketat.push('tanpa website');
+  if (document.getElementById('requireWhatsapp').checked) ketat.push('wajib WhatsApp');
+  if (document.getElementById('filterRating').checked &&
+      parseFloat(document.getElementById('minRating').value) >= 4) ketat.push('rating ≥ 4');
+  if (document.getElementById('filterReviews').checked &&
+      parseInt(document.getElementById('minReviews').value) >= 5) ketat.push('ulasan ≥ 5');
+  const el = document.getElementById('peringatanFilter');
+  if (ketat.length >= 3) {
+    el.innerHTML = `<i class="bi bi-exclamation-triangle me-1"></i>Filter cukup ketat
+      (${ketat.join(', ')}). Kombinasi ini sering menghasilkan sedikit atau nol lead —
+      pertimbangkan mematikan salah satu.`;
+    el.classList.remove('d-none');
+  } else {
+    el.classList.add('d-none');
+  }
+}
+
+function cekProxy(btn) {
+  const statusEl = document.getElementById('proxyStatus');
+  const asli = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+  statusEl.innerHTML = '<small class="text-muted">Menghubungi proxy...</small>';
+  fetch('/check-proxy', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      apify_proxy_token: document.getElementById('apifyToken').value.trim(),
+      apify_proxy_group: document.getElementById('apifyGroup').value,
+      apify_proxy_country: document.getElementById('apifyCountry').value.trim()
+    })
+  })
+  .then(r => r.json())
+  .then(d => {
+    btn.disabled = false; btn.innerHTML = asli;
+    statusEl.innerHTML = d.ok
+      ? `<small class="text-success"><i class="bi bi-check-circle-fill"></i> Proxy jalan — IP: <strong>${d.ip}</strong></small>`
+      : `<small class="text-danger"><i class="bi bi-x-circle-fill"></i> ${escapeHtml(d.error || 'Gagal')}</small>`;
+  })
+  .catch(() => {
+    btn.disabled = false; btn.innerHTML = asli;
+    statusEl.innerHTML = '<small class="text-danger">Tidak bisa menghubungi server</small>';
+  });
+}
+
+function runGmaps() {
+  const targets = kumpulkanTargets();
+  if (!targets.length) {
+    alert('Isi jenis bisnis dan pilih minimal satu wilayah.');
+    return;
+  }
+
+  const params = {
+    search_targets: targets,
+    max_results: parseInt(document.getElementById('maxResults').value),
+    radius_km: parseFloat(document.getElementById('radiusKm').value) || 0,
+    filter_rating: document.getElementById('filterRating').checked,
+    min_rating: parseFloat(document.getElementById('minRating').value),
+    filter_reviews: document.getElementById('filterReviews').checked,
+    min_reviews: parseInt(document.getElementById('minReviews').value),
+    require_phone: document.getElementById('requirePhone').checked,
+    require_whatsapp: document.getElementById('requireWhatsapp').checked,
+    require_no_website: document.getElementById('requireNoWebsite').checked,
+    sertakan_bisnis_tutup: document.getElementById('sertakanTutup').checked,
+    output_format: document.getElementById('outputFormat').value,
+    headless: document.getElementById('headlessMode').checked,
+
+    dedup_enabled: document.getElementById('dedupEnabled').checked,
+    dedup_bulan: parseInt(document.getElementById('dedupBulan').value) || 6,
+    refresh_kontak: document.getElementById('refreshKontak').checked,
+    refresh_interval_hari: parseInt(document.getElementById('refreshHari').value) || 30,
+    enrich_website: document.getElementById('enrichWebsite').checked,
+
+    use_proxy: document.getElementById('useProxy').checked,
+    apify_proxy_token: document.getElementById('apifyToken').value.trim(),
+    apify_proxy_group: document.getElementById('apifyGroup').value,
+    apify_proxy_country: document.getElementById('apifyCountry').value.trim(),
+
+    use_gemini: document.getElementById('useGemini').checked,
+    gemini_api_key: document.getElementById('geminiApiKey').value.trim(),
+    simpan_gemini_ke_db: document.getElementById('simpanGemini').checked,
+  };
+
+  startJob('/gmaps/run', params);
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  document.querySelectorAll('.target-row').forEach(pasangPicker);
+  hitungEstimasi();
+  cekFilterKetat();
+});
+</script>
+{% endblock %}

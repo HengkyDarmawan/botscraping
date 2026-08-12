@@ -1,0 +1,20 @@
+2026/06/22-10:19:25.340 9d0 Reusing MANIFEST C:\Users\user\Desktop\botscraping\data\chrome_profile\Default\Local Storage\leveldb/MANIFEST-000001
+2026/06/22-10:19:25.349 9d0 Recovering log #4
+2026/06/22-10:19:25.380 9d0 Level-0 table #6: started
+2026/06/22-10:19:25.455 9d0 Level-0 table #6: 774142 bytes OK
+2026/06/22-10:19:25.457 9d0 Recovering log #5
+2026/06/22-10:19:25.481 9d0 Level-0 table #7: started
+2026/06/22-10:19:25.567 9d0 Level-0 table #7: 904299 bytes OK
+2026/06/22-10:19:25.580 9d0 Delete type=0 #4
+2026/06/22-10:19:25.580 9d0 Delete type=0 #5
+2026/06/22-10:20:25.614 3824 Level-0 table #10: started
+2026/06/22-10:20:25.634 3824 Level-0 table #10: 771376 bytes OK
+2026/06/22-10:20:25.638 3824 Delete type=0 #8
+2026/06/22-10:20:25.638 9d0 Compacting 4@0 + 0@1 files
+2026/06/22-10:20:25.679 9d0 Generated table #11@0: 44 keys, 923385 bytes
+2026/06/22-10:20:25.679 9d0 Compacted 4@0 + 0@1 files => 923385 bytes
+2026/06/22-10:20:25.681 9d0 compacted to: files[ 0 1 0 0 0 0 0 ]
+2026/06/22-10:20:25.682 9d0 Delete type=2 #3
+2026/06/22-10:20:25.682 9d0 Delete type=2 #6
+2026/06/22-10:20:25.682 9d0 Delete type=2 #7
+2026/06/22-10:20:25.682 9d0 Delete type=2 #10

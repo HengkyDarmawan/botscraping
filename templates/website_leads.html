@@ -1,0 +1,220 @@
+{% extends "base.html" %}
+{% block title %}Website Leads{% endblock %}
+{% block page_title %}<i class="bi bi-globe-americas me-2 text-primary"></i>Website Leads — Cari Calon Klien Jasa Website{% endblock %}
+
+{% block content %}
+<div class="row g-4">
+  <div class="col-lg-5">
+    <div class="card">
+      <div class="card-header text-white" style="background:linear-gradient(135deg,#1565C0,#0D47A1)">
+        <i class="bi bi-sliders me-2"></i>Konfigurasi Pencarian
+      </div>
+      <div class="card-body">
+
+        <!-- Sumber -->
+        <div class="mb-3">
+          <label class="form-label fw-semibold">Sumber Leads</label>
+          <div class="d-flex flex-column gap-2">
+            <div class="form-check">
+              <input class="form-check-input" type="checkbox" id="srcGmaps" value="gmaps" checked onchange="toggleGmapsSection()">
+              <label class="form-check-label" for="srcGmaps">
+                <i class="bi bi-geo-alt-fill text-danger me-1"></i>
+                <strong>Google Maps</strong> — bisnis yang belum punya website
+              </label>
+            </div>
+            <div class="form-check">
+              <input class="form-check-input" type="checkbox" id="srcGemini" value="gemini" checked onchange="toggleGeminiSection()">
+              <label class="form-check-label" for="srcGemini">
+                <i class="bi bi-stars text-warning me-1"></i>
+                <strong>Gemini AI Search</strong> — orang yang posting "cari jasa website"
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <hr class="my-2">
+
+        <!-- Google Maps Section -->
+        <div id="gmapsSection">
+          <div class="mb-2">
+            <label class="form-label small fw-semibold text-danger">
+              <i class="bi bi-geo-alt-fill me-1"></i>Google Maps Settings
+            </label>
+          </div>
+          <div class="mb-3">
+            <label class="form-label small">Jenis Bisnis / Keyword</label>
+            <input type="text" id="keyword" class="form-control" placeholder="mis: salon, bengkel motor, toko sembako, restoran">
+            <div class="form-text">Kategori bisnis yang ingin kamu tawarkan jasa website-nya.</div>
+          </div>
+          <div class="mb-3">
+            <label class="form-label small">Area / Kota</label>
+            <input type="text" id="area" class="form-control" placeholder="mis: Jakarta Selatan, Bandung, Surabaya">
+          </div>
+        </div>
+
+        <hr class="my-2">
+
+        <!-- Gemini Section -->
+        <div id="geminiSection">
+          <div class="mb-2">
+            <label class="form-label small fw-semibold text-warning">
+              <i class="bi bi-stars me-1"></i>Gemini AI Settings
+            </label>
+          </div>
+          <div class="mb-3">
+            <label class="form-label small">Intent Keyword</label>
+            <input type="text" id="intentKeyword" class="form-control" value="cari jasa website">
+            <div class="form-text">Kata kunci yang orang posting ketika butuh website. Contoh: "cari jasa website murah", "buat toko online".</div>
+          </div>
+          <div class="mb-3">
+            <label class="form-label small">
+              Gemini API Key
+              <a href="https://aistudio.google.com/app/apikey" target="_blank" class="ms-2 badge bg-warning text-dark text-decoration-none" style="font-size:.7rem">
+                <i class="bi bi-key-fill me-1"></i>Dapatkan GRATIS
+              </a>
+            </label>
+            <div class="input-group">
+              <input type="password" id="geminiApiKey" class="form-control font-monospace" placeholder="AIza...">
+              <button class="btn btn-outline-secondary" type="button"
+                onclick="checkGeminiKey('geminiApiKey', 'geminiStatus', this)">
+                <i class="bi bi-plug-fill"></i> Cek
+              </button>
+            </div>
+            <div id="geminiStatus" class="mt-1"></div>
+            <div class="form-text text-muted">Free tier: 15 req/menit, 1.500 req/hari — cukup untuk ratusan leads.</div>
+          </div>
+          <div class="alert alert-info py-2 small">
+            <i class="bi bi-info-circle-fill me-1"></i>
+            <strong>Mengapa Gemini?</strong> Gemini menggunakan infrastruktur Google sendiri, sehingga tidak kena block Cloudflare atau CAPTCHA seperti scraper biasa.
+          </div>
+        </div>
+
+        <hr class="my-2">
+
+        <!-- Max Results -->
+        <div class="mb-3">
+          <label class="form-label small">Maks. Leads per Sumber</label>
+          <input type="number" id="maxResults" class="form-control" value="20" min="1" max="100">
+        </div>
+
+        <button id="runBtn" class="btn w-100 text-white fw-bold"
+          style="background:linear-gradient(135deg,#1565C0,#0D47A1)"
+          onclick="runWebsiteLeads()">
+          <i class="bi bi-search-heart-fill me-2"></i>Cari Calon Klien Website
+        </button>
+
+      </div>
+    </div>
+
+    <!-- Output columns info -->
+    <div class="card mt-3">
+      <div class="card-body">
+        <h6 class="fw-bold"><i class="bi bi-table me-2 text-primary"></i>Kolom Output Excel</h6>
+        <div class="row g-1">
+          {% for col in [
+            'Sumber (GMaps/Gemini)', 'Nama Bisnis/Poster',
+            'Telepon', 'WhatsApp Link',
+            'Email', 'Alamat/Kota',
+            'Kategori Bisnis', 'Mengapa Butuh Website',
+            'Detail Post', 'Potensi (Tinggi/Sedang/Rendah)',
+            'Status Leads', 'Tanggal Scraping',
+            'Source URL'
+          ] %}
+          <div class="col-6"><small class="text-muted">• {{ col }}</small></div>
+          {% endfor %}
+        </div>
+        <div class="mt-2 small">
+          <span class="badge" style="background:#D5F5E3;color:#1D8348">Hijau = Potensi Tinggi</span>
+          <span class="badge ms-1" style="background:#FADBD8;color:#922B21">Merah = Potensi Rendah</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-7">
+    <div class="card">
+      <div class="card-header text-white d-flex justify-content-between align-items-center" style="background:#0D47A1">
+        <span><i class="bi bi-activity me-2"></i>Progress</span>
+        <div class="d-flex align-items-center gap-3">
+          <span>Ditemukan: <strong id="foundCount">0</strong> leads</span>
+          <span id="statusBadge" class="badge bg-secondary">Menunggu</span>
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="progress mb-3" style="height:14px">
+          <div id="progressBar" class="progress-bar progress-bar-striped progress-bar-animated"
+            style="width:0%;background:#1565C0">0%</div>
+        </div>
+        <div class="log-console" id="scrapeLog">
+          <div class="text-muted">Tekan "Cari Calon Klien Website" untuk memulai...</div>
+        </div>
+        <div class="mt-3">
+          <a id="downloadBtn" href="#" class="btn btn-success d-none w-100">
+            <i class="bi bi-download me-2"></i>Download Website Leads Excel
+          </a>
+        </div>
+      </div>
+    </div>
+
+    <div class="card mt-3 border-info">
+      <div class="card-body small">
+        <h6 class="fw-bold text-info"><i class="bi bi-lightbulb-fill me-2"></i>Tips Penggunaan</h6>
+        <ul class="mb-0 text-muted">
+          <li><strong>Google Maps:</strong> keyword spesifik lebih baik — "bengkel motor" daripada "bengkel"</li>
+          <li><strong>Intent Keyword:</strong> coba variasi — "buat website toko online", "website murah usaha kecil"</li>
+          <li><strong>Potensi Tinggi</strong> = bisnis dengan ulasan banyak (GMaps) atau ada kontak (Gemini)</li>
+          <li>Leads Gemini datang dari <strong>forum, Facebook publik, Twitter, blog</strong> — bukan login-gated</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+function toggleGmapsSection() {
+  const show = document.getElementById('srcGmaps').checked;
+  document.getElementById('gmapsSection').style.display = show ? '' : 'none';
+}
+
+function toggleGeminiSection() {
+  const show = document.getElementById('srcGemini').checked;
+  document.getElementById('geminiSection').style.display = show ? '' : 'none';
+}
+
+function runWebsiteLeads() {
+  const srcGmaps = document.getElementById('srcGmaps').checked;
+  const srcGemini = document.getElementById('srcGemini').checked;
+
+  if (!srcGmaps && !srcGemini) {
+    alert('Pilih minimal satu sumber leads.');
+    return;
+  }
+  if (srcGmaps && !document.getElementById('keyword').value.trim()) {
+    alert('Isi keyword bisnis untuk Google Maps terlebih dahulu.');
+    return;
+  }
+  if (srcGemini && !document.getElementById('geminiApiKey').value.trim()) {
+    alert('Isi Gemini API Key terlebih dahulu, atau uncheck sumber Gemini.');
+    return;
+  }
+
+  const sources = [];
+  if (srcGmaps) sources.push('gmaps');
+  if (srcGemini) sources.push('gemini');
+
+  const params = {
+    sources: sources,
+    keyword: document.getElementById('keyword').value.trim(),
+    area: document.getElementById('area').value.trim(),
+    intent_keyword: document.getElementById('intentKeyword').value.trim() || 'cari jasa website',
+    gemini_api_key: document.getElementById('geminiApiKey').value.trim(),
+    max_results: parseInt(document.getElementById('maxResults').value) || 20,
+    headless: true,
+  };
+
+  startJob('/website-leads/run', params);
+}
+</script>
+{% endblock %}

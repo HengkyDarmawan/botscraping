@@ -1,0 +1,400 @@
+{% extends "base.html" %}
+{% block title %}Price Comparison{% endblock %}
+{% block page_title %}<i class="bi bi-tags-fill text-primary me-2"></i>Price Comparison{% endblock %}
+
+{% block content %}
+<div class="row g-4">
+  <div class="col-lg-5">
+    <div class="card">
+      <div class="card-header bg-primary text-white">
+        <i class="bi bi-sliders me-2"></i>Konfigurasi Pencarian Harga
+      </div>
+      <div class="card-body">
+
+        <!-- ── Pilih Mode ── -->
+        <label class="form-label">Mode Scraping</label>
+        <div class="btn-group w-100 mb-3" role="group">
+          <input type="radio" class="btn-check" name="mode" id="modeProduk" value="produk" checked
+                 onchange="switchMode('produk')">
+          <label class="btn btn-outline-primary btn-sm" for="modeProduk"><i class="bi bi-search me-1"></i>Cari Produk</label>
+          <input type="radio" class="btn-check" name="mode" id="modeToko" value="toko"
+                 onchange="switchMode('toko')">
+          <label class="btn btn-outline-primary btn-sm" for="modeToko"><i class="bi bi-shop me-1"></i>Pilih Toko</label>
+          <input type="radio" class="btn-check" name="mode" id="modeKwToko" value="keyword_toko"
+                 onchange="switchMode('keyword_toko')">
+          <label class="btn btn-outline-primary btn-sm" for="modeKwToko"><i class="bi bi-search-heart me-1"></i>Keyword + Toko</label>
+        </div>
+
+        <!-- ── MODE PRODUK ── -->
+        <div id="sectionProduk">
+          <div class="mb-3">
+            <label class="form-label">Nama Produk / Keyword <span class="text-danger">*</span></label>
+            <input type="text" id="keyword" class="form-control" placeholder="mis. Laptop ASUS ROG, RAM DDR4 8GB">
+          </div>
+
+          <div class="mb-3">
+            <label class="form-label">Sumber Data</label>
+            <div class="form-check">
+              <input class="form-check-input" type="checkbox" id="srcTokopedia" checked>
+              <label class="form-check-label" for="srcTokopedia">🟢 Tokopedia</label>
+            </div>
+            <div class="form-check">
+              <input class="form-check-input" type="checkbox" id="srcShopee" checked>
+              <label class="form-check-label" for="srcShopee">🛒 Shopee
+                <span class="badge bg-danger ms-1" style="font-size:.6rem">DataDome — perlu proxy</span></label>
+            </div>
+            <div class="form-check">
+              <input class="form-check-input" type="checkbox" id="srcCustom">
+              <label class="form-check-label" for="srcCustom"><i class="bi bi-globe me-1"></i>Website Kompetitor (Custom URL)</label>
+            </div>
+          </div>
+
+          <div id="customUrlSection" class="mb-3 p-3 bg-light rounded" style="display:none">
+            <label class="form-label">URL Kompetitor <span class="text-danger">*</span></label>
+            <input type="url" id="customUrl" class="form-control mb-2" placeholder="https://www.kompetitor.com/produk?q=...">
+            <label class="form-label">CSS Selector Harga <small class="text-muted">(kosongkan = auto)</small></label>
+            <input type="text" id="customSelHarga" class="form-control mb-2" placeholder=".price, [class*='price']">
+            <label class="form-label">CSS Selector Nama <small class="text-muted">(opsional)</small></label>
+            <input type="text" id="customSelNama" class="form-control" placeholder=".product-name, h2">
+          </div>
+
+          <!-- Gemini AI tambahan -->
+          <hr class="my-3">
+          <div class="form-check mb-2">
+            <input class="form-check-input" type="checkbox" id="useGemini"
+              onchange="toggleGeminiSection(this, 'geminiKeySection')">
+            <label class="form-check-label" for="useGemini">
+              <i class="bi bi-stars text-warning me-1"></i><strong>Tambah Gemini AI Price Research</strong>
+              <span class="badge bg-warning text-dark ms-1" style="font-size:.65rem">bebas block</span>
+            </label>
+          </div>
+          <div id="geminiKeySection" class="ps-3 mb-3" style="display:none">
+            <label class="form-label small">Gemini API Key
+              <a href="https://aistudio.google.com/app/apikey" target="_blank"
+                class="ms-2 badge bg-warning text-dark text-decoration-none" style="font-size:.65rem">
+                <i class="bi bi-key-fill me-1"></i>Dapatkan GRATIS</a>
+            </label>
+            <div class="input-group mb-1">
+              <input type="password" id="geminiApiKey" class="form-control form-control-sm font-monospace" placeholder="AIza...">
+              <button class="btn btn-outline-secondary btn-sm" type="button"
+                onclick="checkGeminiKey('geminiApiKey', 'geminiStatus', this)"><i class="bi bi-plug-fill"></i> Cek</button>
+            </div>
+            <div id="geminiStatus" class="mb-1"></div>
+            <div class="form-text">Free: 15 req/menit — harga Gemini ikut dihitung dalam rata-rata pasar</div>
+          </div>
+        </div>
+
+        <!-- ── Keyword untuk mode Keyword + Toko ── -->
+        <div id="sectionKwToko" style="display:none">
+          <div class="mb-3">
+            <label class="form-label">Keyword Produk <span class="text-danger">*</span></label>
+            <input type="text" id="kwToko" class="form-control" placeholder="mis. mouse, keyboard mechanical">
+            <div class="form-text">Keyword ini dicari <strong>di dalam</strong> toko yang Anda pilih.</div>
+          </div>
+        </div>
+
+        <!-- ── MODE TOKO / KEYWORD+TOKO (daftar toko) ── -->
+        <div id="sectionToko" style="display:none">
+          <div class="d-flex justify-content-between align-items-center mb-2">
+            <label class="form-label mb-0">Pilih Toko <small class="text-muted">(bisa lebih dari 1)</small></label>
+            <button class="btn btn-sm btn-outline-primary" type="button" onclick="loadStores()">
+              <i class="bi bi-arrow-clockwise"></i></button>
+          </div>
+          <div id="storeList" class="border rounded p-2 mb-2" style="max-height:240px; overflow-y:auto">
+            <div class="text-muted small">Memuat daftar toko...</div>
+          </div>
+
+          <button class="btn btn-sm btn-outline-success w-100 mb-2" type="button"
+                  data-bs-toggle="collapse" data-bs-target="#addStoreForm">
+            <i class="bi bi-plus-circle me-1"></i>Tambah Toko Baru
+          </button>
+          <div class="collapse" id="addStoreForm">
+            <div class="p-3 bg-light rounded mb-2">
+              <div class="mb-2">
+                <label class="form-label small">Platform</label>
+                <select id="newStorePlatform" class="form-select form-select-sm">
+                  <option value="tokopedia">Tokopedia</option>
+                  <option value="shopee">Shopee</option>
+                </select>
+              </div>
+              <div class="mb-2">
+                <label class="form-label small">Nama Toko</label>
+                <input type="text" id="newStoreNama" class="form-control form-control-sm" placeholder="mis. Logitech Official">
+              </div>
+              <div class="mb-2">
+                <label class="form-label small">URL / Username Toko</label>
+                <input type="text" id="newStoreUrl" class="form-control form-control-sm"
+                       placeholder="https://www.tokopedia.com/namatoko  atau  namatoko">
+              </div>
+              <button class="btn btn-sm btn-success w-100" type="button" onclick="addStore()">
+                <i class="bi bi-save me-1"></i>Simpan Toko</button>
+              <div id="addStoreStatus" class="mt-1 small"></div>
+            </div>
+          </div>
+        </div>
+
+        <hr class="my-3">
+
+        <!-- ── Engine ── -->
+        <label class="form-label">Engine Browser</label>
+        <div class="btn-group w-100 mb-2" role="group">
+          <input type="radio" class="btn-check" name="engine" id="engCamoufox" value="camoufox" checked
+                 onchange="switchEngine('camoufox')">
+          <label class="btn btn-outline-secondary btn-sm" for="engCamoufox"><i class="bi bi-incognito me-1"></i>Camoufox (anti-deteksi)</label>
+          <input type="radio" class="btn-check" name="engine" id="engChrome" value="my_chrome"
+                 onchange="switchEngine('my_chrome')">
+          <label class="btn btn-outline-secondary btn-sm" for="engChrome"><i class="bi bi-google me-1"></i>Chrome saya (login)</label>
+        </div>
+
+        <div id="chromePanel" class="p-3 bg-light rounded mb-3" style="display:none">
+          <div class="small text-muted mb-2">
+            Untuk <strong>Shopee</strong> (perlu login). Buka Chrome di bawah, <strong>login sekali</strong>,
+            sesi tersimpan untuk run berikutnya.
+          </div>
+          <div class="small mb-2 p-2 rounded" style="background:#fff3cd">
+            <i class="bi bi-exclamation-triangle text-warning me-1"></i>
+            Jika muncul <strong>captcha "tekan &amp; tahan"</strong> (DataDome), selesaikan
+            <strong>manual</strong> di jendela Chrome — scraper menunggu lalu lanjut otomatis.
+          </div>
+          <button class="btn btn-sm btn-primary w-100 mb-2" type="button" onclick="launchChrome(this)">
+            <i class="bi bi-box-arrow-up-right me-1"></i>Buka Chrome Scraping
+          </button>
+          <div class="d-flex align-items-center gap-2">
+            <span id="chromeStatus" class="badge bg-secondary">Status: belum dicek</span>
+            <button class="btn btn-sm btn-outline-secondary py-0" type="button" onclick="checkChromeStatus()">
+              <i class="bi bi-arrow-clockwise"></i> Cek</button>
+          </div>
+        </div>
+
+        <!-- ── Pengaturan umum ── -->
+        <div class="mb-3">
+          <label class="form-label">Max Produk per Sumber/Toko</label>
+          <input type="number" id="maxPriceResults" class="form-control" value="20" min="5" max="100">
+        </div>
+
+        <div class="form-check form-switch mb-3">
+          <input class="form-check-input" type="checkbox" id="showBrowser" checked>
+          <label class="form-check-label" for="showBrowser">
+            Tampilkan jendela browser <small class="text-muted">(lebih sulit terdeteksi bot)</small></label>
+        </div>
+
+        <!-- Proxy opsional -->
+        <div class="form-check mb-2">
+          <input class="form-check-input" type="checkbox" id="useProxy" onchange="toggleProxy(this)">
+          <label class="form-check-label" for="useProxy">
+            <i class="bi bi-shield-lock me-1"></i>Pakai Proxy Residential
+            <span class="badge bg-success ms-1" style="font-size:.6rem">wajib untuk Shopee stabil</span></label>
+        </div>
+        <div id="proxySection" class="ps-3 mb-3" style="display:none">
+          <input type="text" id="proxyServer" class="form-control form-control-sm mb-1" placeholder="http://host:port">
+          <div class="row g-1">
+            <div class="col-6"><input type="text" id="proxyUser" class="form-control form-control-sm" placeholder="username (opsional)"></div>
+            <div class="col-6"><input type="password" id="proxyPass" class="form-control form-control-sm" placeholder="password (opsional)"></div>
+          </div>
+        </div>
+
+        <button id="runBtn" class="btn btn-scrape w-100" onclick="runPricing()">
+          <i class="bi bi-play-fill me-2"></i>Bandingkan Harga
+        </button>
+      </div>
+    </div>
+
+    <div class="card mt-3">
+      <div class="card-body">
+        <h6 class="fw-bold"><i class="bi bi-lightbulb me-2 text-warning"></i>Cara Pakai</h6>
+        <ol class="small text-muted mb-0">
+          <li><strong>Cari Produk</strong>: masukkan keyword → bandingkan harga lintas marketplace</li>
+          <li><strong>Pilih Toko</strong>: centang 1+ toko dari database → ambil harga semua produknya</li>
+          <li>Tokopedia relatif lolos; <strong>Shopee perlu proxy</strong> (DataDome)</li>
+          <li>Rekomendasi harga = 5% di bawah rata-rata pasar</li>
+        </ol>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-7">
+    <div class="card">
+      <div class="card-header bg-dark text-white d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-activity me-2"></i>Progress</span>
+        <div class="d-flex align-items-center gap-3">
+          <span>Ditemukan: <strong id="foundCount">0</strong> produk</span>
+          <span id="statusBadge" class="badge bg-secondary">Menunggu</span>
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="progress mb-3" style="height:14px">
+          <div id="progressBar" class="progress-bar bg-primary progress-bar-striped progress-bar-animated" style="width:0%">0%</div>
+        </div>
+        <div class="log-console" id="scrapeLog">
+          <div class="text-muted">Tekan "Bandingkan Harga" untuk memulai...</div>
+        </div>
+        <div class="mt-3">
+          <a id="downloadBtn" href="#" class="btn btn-success d-none w-100">
+            <i class="bi bi-download me-2"></i>Download Hasil Perbandingan</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="card mt-3">
+      <div class="card-body">
+        <h6 class="fw-bold"><i class="bi bi-table me-2 text-primary"></i>Kolom Output Excel</h6>
+        <div class="row g-1">
+          {% for col in ['Platform','Nama Produk','Harga','Toko/Seller','Rating','Terjual','Rata² Pasar','Median Pasar','Rekomendasi Harga ✅','Selisih vs Rata²'] %}
+          <div class="col-6"><small class="text-muted">• {{ col }}</small></div>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+document.getElementById('srcCustom').addEventListener('change', function() {
+  document.getElementById('customUrlSection').style.display = this.checked ? 'block' : 'none';
+});
+
+function switchMode(mode) {
+  const showStores = (mode === 'toko' || mode === 'keyword_toko');
+  document.getElementById('sectionProduk').style.display = mode === 'produk' ? 'block' : 'none';
+  document.getElementById('sectionToko').style.display   = showStores ? 'block' : 'none';
+  document.getElementById('sectionKwToko').style.display = mode === 'keyword_toko' ? 'block' : 'none';
+  if (showStores) loadStores();
+}
+
+function toggleProxy(cb) {
+  document.getElementById('proxySection').style.display = cb.checked ? 'block' : 'none';
+}
+
+// ── Engine ──
+function switchEngine(engine) {
+  document.getElementById('chromePanel').style.display = engine === 'my_chrome' ? 'block' : 'none';
+  if (engine === 'my_chrome') checkChromeStatus();
+}
+
+function launchChrome(btn) {
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Membuka...';
+  fetch('/pricing/launch-chrome', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'})
+    .then(r => r.json()).then(d => {
+      btn.disabled = false;
+      btn.innerHTML = '<i class="bi bi-box-arrow-up-right me-1"></i>Buka Chrome Scraping';
+      if (!d.ok) { alert(d.error || 'Gagal membuka Chrome'); return; }
+      setTimeout(checkChromeStatus, 2500);
+    }).catch(() => { btn.disabled = false; });
+}
+
+function checkChromeStatus() {
+  const el = document.getElementById('chromeStatus');
+  el.className = 'badge bg-secondary'; el.textContent = 'Status: mengecek...';
+  fetch('/pricing/chrome-status').then(r => r.json()).then(d => {
+    if (d.connected) { el.className = 'badge bg-success'; el.textContent = '✓ Terhubung (port ' + d.port + ')'; }
+    else { el.className = 'badge bg-danger'; el.textContent = '✗ Belum terhubung — klik "Buka Chrome Scraping"'; }
+  });
+}
+
+// ── Database toko ──
+let STORES = [];
+function loadStores() {
+  fetch('/pricing/stores').then(r => r.json()).then(data => {
+    STORES = data.stores || [];
+    const el = document.getElementById('storeList');
+    if (!STORES.length) { el.innerHTML = '<div class="text-muted small">Belum ada toko. Tambah di bawah.</div>'; return; }
+    let html = '';
+    ['tokopedia', 'shopee'].forEach(plat => {
+      const group = STORES.filter(s => s.platform === plat);
+      if (!group.length) return;
+      html += `<div class="fw-bold small text-uppercase text-muted mt-1">${plat === 'tokopedia' ? '🟢 Tokopedia' : '🛒 Shopee'}</div>`;
+      group.forEach(s => {
+        html += `<div class="form-check d-flex align-items-center">
+          <input class="form-check-input store-cb" type="checkbox" value="${s.id}" id="cb_${s.id}">
+          <label class="form-check-label flex-grow-1 ms-1" for="cb_${s.id}">${s.nama}
+            <a href="${s.url}" target="_blank" class="text-muted ms-1" style="font-size:.7rem">↗</a></label>
+          <button class="btn btn-sm text-danger py-0 px-1" type="button" title="Hapus" onclick="delStore('${s.id}')">
+            <i class="bi bi-trash"></i></button>
+        </div>`;
+      });
+    });
+    el.innerHTML = html;
+  });
+}
+
+function addStore() {
+  const platform = document.getElementById('newStorePlatform').value;
+  const nama = document.getElementById('newStoreNama').value.trim();
+  const url  = document.getElementById('newStoreUrl').value.trim();
+  const st = document.getElementById('addStoreStatus');
+  if (!url) { st.innerHTML = '<span class="text-danger">URL / username wajib diisi.</span>'; return; }
+  fetch('/pricing/stores', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({platform, nama, url})
+  }).then(r => r.json()).then(d => {
+    if (d.ok) {
+      st.innerHTML = '<span class="text-success">✓ Toko ditambahkan.</span>';
+      document.getElementById('newStoreNama').value = '';
+      document.getElementById('newStoreUrl').value = '';
+      loadStores();
+    } else { st.innerHTML = `<span class="text-danger">${d.error || 'Gagal'}</span>`; }
+  });
+}
+
+function delStore(id) {
+  if (!confirm('Hapus toko ini dari database?')) return;
+  fetch('/pricing/stores/delete', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({id})
+  }).then(r => r.json()).then(() => loadStores());
+}
+
+// ── Jalankan ──
+function runPricing() {
+  const mode = document.querySelector('input[name="mode"]:checked').value;
+  const engine = document.querySelector('input[name="engine"]:checked').value;
+  const params = {
+    mode: mode,
+    engine: engine,
+    max_results: parseInt(document.getElementById('maxPriceResults').value) || 20,
+    headless: !document.getElementById('showBrowser').checked,
+    use_proxy: document.getElementById('useProxy').checked,
+    proxy_server: document.getElementById('proxyServer').value.trim(),
+    proxy_username: document.getElementById('proxyUser').value.trim(),
+    proxy_password: document.getElementById('proxyPass').value.trim(),
+  };
+
+  if (mode === 'produk') {
+    const kw = document.getElementById('keyword').value.trim();
+    if (!kw) { alert('Masukkan keyword produk terlebih dahulu.'); return; }
+    const sources = [];
+    if (document.getElementById('srcTokopedia').checked) sources.push('tokopedia');
+    if (document.getElementById('srcShopee').checked) sources.push('shopee');
+    if (document.getElementById('srcCustom').checked) sources.push('custom');
+    if (!sources.length) { alert('Pilih minimal satu sumber data.'); return; }
+    Object.assign(params, {
+      keyword: kw,
+      sources: sources,
+      custom_url: document.getElementById('customUrl').value.trim(),
+      custom_sel_harga: document.getElementById('customSelHarga').value.trim(),
+      custom_sel_nama: document.getElementById('customSelNama').value.trim(),
+      use_gemini: document.getElementById('useGemini').checked,
+      gemini_api_key: document.getElementById('geminiApiKey').value.trim(),
+    });
+  } else {
+    // mode 'toko' atau 'keyword_toko'
+    const ids = Array.from(document.querySelectorAll('.store-cb:checked')).map(c => c.value);
+    if (!ids.length) { alert('Pilih minimal satu toko.'); return; }
+    params.store_ids = ids;
+    if (mode === 'keyword_toko') {
+      const kw = document.getElementById('kwToko').value.trim();
+      if (!kw) { alert('Masukkan keyword produk terlebih dahulu.'); return; }
+      params.keyword = kw;
+    }
+  }
+
+  startJob('/pricing/run', params);
+}
+
+// Muat daftar toko sekali di awal (untuk mode toko)
+document.addEventListener('DOMContentLoaded', loadStores);
+</script>
+{% endblock %}
