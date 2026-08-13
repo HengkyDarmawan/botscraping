@@ -130,6 +130,33 @@ body { margin: 0; background: #f0f4f8; font-family: 'Segoe UI', sans-serif; }
 .wp-shortcuts { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
 .wp-shortcut { font-size: .72rem; padding: 2px 9px; border-radius: 12px; }
 
+/* Panel pintasan berkelompok — tertutup sampai diminta, supaya baris pintasan
+   tidak berubah jadi dinding berisi puluhan tombol. */
+.wp-panel {
+  display: none; margin-top: 8px; padding: 10px 12px;
+  background: #fff; border: 1px solid #e3e7eb; border-radius: 8px;
+}
+.wp-panel.show { display: block; }
+.wp-grup + .wp-grup { margin-top: 11px; padding-top: 10px; border-top: 1px solid #f0f2f5; }
+.wp-grup-judul {
+  font-size: .68rem; font-weight: 700; letter-spacing: .06em;
+  text-transform: uppercase; color: #8a94a0; margin-bottom: 6px;
+}
+.wp-grup-isi { display: flex; flex-wrap: wrap; gap: 5px; }
+.wp-provinsi { font-size: .78rem; }
+.wp-catatan { font-size: .7rem; color: #8a94a0; margin-top: 7px; line-height: 1.45; }
+.wp-umpanbalik {
+  display: none; margin-top: 6px; font-size: .74rem;
+  color: #1b5e35; background: #e6f6ec; border: 1px solid #bfe4cd;
+  border-radius: 6px; padding: 4px 9px;
+}
+.wp-umpanbalik.show { display: block; }
+.wp-label {
+  font-size: .7rem; font-weight: 600; color: #6c757d;
+  text-transform: uppercase; letter-spacing: .04em; margin-bottom: 3px;
+}
+.wp-alasan { color: #8a94a0; font-size: .68rem; text-align: right; max-width: 55%; }
+
 /* Tier lead */
 .tier-PANAS  { background: #ffd6d6; color: #922; }
 .tier-HANGAT { background: #fff2cc; color: #8a6d1a; }

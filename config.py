@@ -33,9 +33,18 @@ FILTER_RATING      = True   # Aktifkan filter rating minimum
 MIN_RATING         = 4.0    #   → hanya bisnis dengan rating >= nilai ini
 FILTER_REVIEWS     = True   # Aktifkan filter jumlah ulasan minimum
 MIN_REVIEWS        = 5      #   → minimal jumlah ulasan (singkirkan bisnis baru)
-REQUIRE_PHONE      = True   # Wajib punya nomor telepon (apa pun jenisnya)
-REQUIRE_WHATSAPP   = True   # Wajib nomor HP seluler (kandidat WhatsApp); telepon
-                            #   kabel (021, 022, dst) dibuang
+# Syarat kontak — SATU pilihan, menggantikan REQUIRE_PHONE + REQUIRE_WHATSAPP:
+#   "wa"       = wajib nomor HP seluler (kandidat WhatsApp); telepon kabel dibuang
+#   "telepon"  = telepon apa pun, termasuk kabel (021, 022, dst)
+#   "email"    = wajib punya email — untuk blast email / telemarketing
+#   "apa_saja" = lolos kalau punya SALAH SATU: WA / telepon / email / sosmed
+#   "bebas"    = tidak difilter
+# PENTING untuk mode "email": email hanya bisa dipanen dari WEBSITE bisnis
+# (scrapers/enrich.py). Jadi mode ini hanya masuk akal kalau REQUIRE_NO_WEBSITE
+# dimatikan — bisnis tanpa website tidak punya sumber email untuk dipanen.
+MODE_KONTAK        = "wa"
+REQUIRE_PHONE      = True   # (lama) dipakai hanya bila MODE_KONTAK dikosongkan
+REQUIRE_WHATSAPP   = True   # (lama) dipakai hanya bila MODE_KONTAK dikosongkan
 REQUIRE_NO_WEBSITE = True   # Wajib BELUM punya website di GMaps (lead jasa website)
 SERTAKAN_BISNIS_TUTUP = False  # False = buang bisnis "Tutup permanen"/"Tutup sementara"
 
@@ -92,7 +101,18 @@ MAX_DELAY = 4.0  # Jeda maksimum (detik)
 # ─── BROWSER ──────────────────────────────────────────────────────────────────
 HEADLESS    = False  # False = tampilkan jendela browser (bagus untuk development)
                      # True  = mode background tanpa jendela (untuk production/server)
-MAX_RESULTS = 20     # 20 per query × 3 query = ~50 leads unik setelah filter
+MAX_RESULTS = 20     # Jumlah lead yang LOLOS filter awal per query (bukan sekadar
+                     #   20 kartu pertama). Feed Google sendiri mentok di ±120 hasil
+                     #   per pencarian, jadi untuk volume besar perbanyak WILAYAH
+                     #   dan JENIS BISNIS, bukan angka ini.
+
+# Berapa halaman listing dibuka bersamaan. Ini pengungkit kecepatan terbesar:
+# tiap listing ±10 detik dan hampir seluruhnya cuma menunggu jaringan.
+#   1 = paling aman (perilaku lama, satu per satu)
+#   3 = default, aman untuk pemakaian normal
+#   5-8 = jauh lebih cepat, tapi naikkan hanya kalau proxy Apify aktif —
+#         tanpa rotasi IP, membuka terlalu banyak sekaligus memancing blokir Google.
+LISTING_KONKUREN = 3
 
 # ─── PRICE SCRAPER (Shopee & Tokopedia) ───────────────────────────────────────
 # Nilai default untuk modul scrapers/pricing.py (bisa di-override dari UI).

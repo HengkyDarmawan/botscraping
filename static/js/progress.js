@@ -73,9 +73,15 @@ function startJob(endpoint, params, onDone) {
           if (!batal) { barEl.style.width = '100%'; barEl.textContent = '100%'; }
           barEl.className = 'progress-bar progress-bar-striped ' + (batal ? 'bg-secondary' : 'bg-success');
         }
+        // Selesai tanpa file = tidak ada satu pun lead yang lolos. Ditandai
+        // kuning, bukan hijau: "✅ Selesai" tanpa tombol download membuat user
+        // mengira filenya gagal diunduh, padahal file itu memang tidak dibuat.
+        const kosong = !batal && !d.filename;
+        if (barEl && kosong) barEl.className = 'progress-bar bg-warning';
         if (statusEl) {
-          statusEl.textContent = batal ? '⏹ Dihentikan' : '✅ Selesai';
-          statusEl.className = 'badge ' + (batal ? 'bg-secondary' : 'bg-success');
+          statusEl.textContent = batal ? '⏹ Dihentikan' : (kosong ? '⚠ Tanpa hasil' : '✅ Selesai');
+          statusEl.className = 'badge ' + (batal ? 'bg-secondary'
+                                                 : (kosong ? 'bg-warning text-dark' : 'bg-success'));
         }
         if (stopBtn) stopBtn.classList.add('d-none');
         if (runBtn) { runBtn.disabled = false; runBtn.innerHTML = '<i class="bi bi-play-fill me-2"></i>Mulai Scraping'; }

@@ -12,13 +12,14 @@
       </div>
       <div class="card-body">
 
-        <!-- Target pencarian: 1 jenis bisnis × banyak wilayah -->
+        <!-- Target pencarian: banyak jenis bisnis × banyak wilayah -->
         <div class="mb-3">
           <label class="form-label">Target Pencarian <span class="text-danger">*</span></label>
           <div id="targetList">
             <div class="target-row mb-2">
-              <input type="text" class="form-control form-control-sm jenis-input mb-2"
-                     placeholder="Jenis bisnis (mis. Servis Komputer)" value="Servis Komputer">
+              <div class="wp-label">Jenis bisnis</div>
+              <div class="jenis-host mb-2"></div>
+              <div class="wp-label">Wilayah</div>
               <div class="wilayah-host"></div>
               <div class="text-end mt-2">
                 <button class="btn btn-outline-danger btn-sm" onclick="removeTarget(this)">
@@ -28,13 +29,13 @@
             </div>
           </div>
           <button class="btn btn-outline-success btn-sm mt-1" onclick="addTarget()">
-            <i class="bi bi-plus-circle me-1"></i>Tambah Jenis Bisnis
+            <i class="bi bi-plus-circle me-1"></i>Tambah Baris Target
           </button>
           <div class="form-text">
-            <i class="bi bi-info-circle me-1"></i>Satu baris = satu jenis bisnis dicari di
-            <strong>semua wilayah</strong> yang Anda pilih. Wilayah bertanda
-            <i class="bi bi-geo-alt-fill text-success"></i> punya koordinat, jadi pengaturan
-            Radius berlaku untuknya.
+            <i class="bi bi-info-circle me-1"></i>Setiap <strong>jenis bisnis</strong> dicari di
+            <strong>setiap wilayah</strong> — 5 jenis × 10 wilayah = 50 pencarian.
+            Wilayah bertanda <i class="bi bi-geo-alt-fill text-success"></i> punya koordinat,
+            jadi pengaturan Radius berlaku untuknya.
           </div>
         </div>
 
@@ -55,6 +56,15 @@
             <div class="form-text" style="font-size:.72rem">
               0 = biarkan Google menentukan. Menggeser area tampilan peta,
               bukan filter jarak presisi.
+            </div>
+          </div>
+          <div class="col-6">
+            <label class="form-label">Listing dibuka sekaligus</label>
+            <input type="number" id="listingKonkuren" class="form-control" value="3" min="1" max="8"
+                   oninput="hitungEstimasi()">
+            <div class="form-text" style="font-size:.72rem">
+              Pengungkit kecepatan terbesar. 3 aman; 5-8 jauh lebih cepat tapi
+              naikkan hanya kalau proxy aktif.
             </div>
           </div>
           <div class="col-6">
@@ -92,16 +102,40 @@
           </div>
         </div>
 
+        <!-- Preset: satu klik menyetel filter untuk satu tujuan tertentu -->
+        <div class="mb-2">
+          <label class="form-label mb-1">Preset target</label>
+          <div class="d-flex flex-wrap gap-1">
+            <button type="button" class="btn btn-outline-primary btn-sm"
+                    onclick="pakaiPreset('website')"
+                    title="Bisnis yang belum punya website sama sekali — calon pembeli jasa pembuatan website. Dihubungi lewat WhatsApp.">
+              <i class="bi bi-globe me-1"></i>Cari lead jasa website
+            </button>
+            <button type="button" class="btn btn-outline-primary btn-sm"
+                    onclick="pakaiPreset('email')"
+                    title="Menyasar bisnis yang PUNYA website — dari situlah emailnya didapat. Cocok untuk blast email; jangan dipakai kalau Anda mengejar lead jasa website baru.">
+              <i class="bi bi-envelope-at me-1"></i>Panen email (blast)
+            </button>
+            <button type="button" class="btn btn-outline-primary btn-sm"
+                    onclick="pakaiPreset('luas')"
+                    title="Ambil sebanyak mungkin: apa pun kontaknya, punya website atau tidak.">
+              <i class="bi bi-collection me-1"></i>Jaring luas
+            </button>
+          </div>
+          <div id="presetInfo" class="form-text mt-1" style="font-size:.72rem"></div>
+        </div>
+
         <!-- Opsi tambahan — tiap filter bisa dinyalakan/dimatikan -->
         <div class="mb-2">
-          <div class="form-check form-switch">
-            <input class="form-check-input" type="checkbox" id="requirePhone" checked onchange="cekFilterKetat()">
-            <label class="form-check-label" for="requirePhone">Wajib punya nomor telepon</label>
-          </div>
-          <div class="form-check form-switch mt-1">
-            <input class="form-check-input" type="checkbox" id="requireWhatsapp" checked onchange="cekFilterKetat()">
-            <label class="form-check-label" for="requireWhatsapp">Hanya nomor WhatsApp (HP seluler)</label>
-          </div>
+          <label class="form-label mb-1">Kontak yang wajib ada</label>
+          <select id="modeKontak" class="form-select form-select-sm mb-2" onchange="cekFilterKetat()">
+            <option value="wa" selected>Nomor HP / WhatsApp</option>
+            <option value="telepon">Telepon apa pun (termasuk kabel)</option>
+            <option value="email">Email — untuk blast email</option>
+            <option value="apa_saja">Salah satu ada (WA / telepon / email / sosmed)</option>
+            <option value="bebas">Bebas — jangan difilter</option>
+          </select>
+          <div id="infoKontak" class="form-text mb-2 d-none" style="font-size:.72rem"></div>
           <div class="form-check form-switch mt-1">
             <input class="form-check-input" type="checkbox" id="requireNoWebsite" onchange="cekFilterKetat()">
             <label class="form-check-label" for="requireNoWebsite">Hanya bisnis TANPA website</label>
@@ -318,20 +352,23 @@
 const pickers = [];
 
 function pasangPicker(row) {
-  const host = row.querySelector('.wilayah-host');
-  const p = new WilayahPicker(host);
-  host.addEventListener('wilayah-berubah', hitungEstimasi);
-  row.querySelector('.jenis-input').addEventListener('input', hitungEstimasi);
-  pickers.push({ row, picker: p });
-  return p;
+  const hostWilayah = row.querySelector('.wilayah-host');
+  const hostJenis = row.querySelector('.jenis-host');
+  const wilayah = new WilayahPicker(hostWilayah);
+  const jenis = new KeywordPicker(hostJenis);
+  hostWilayah.addEventListener('wilayah-berubah', hitungEstimasi);
+  hostJenis.addEventListener('wilayah-berubah', hitungEstimasi);
+  pickers.push({ row, picker: wilayah, jenis });
+  return wilayah;
 }
 
 function addTarget() {
   const div = document.createElement('div');
   div.className = 'target-row mb-2';
   div.innerHTML = `
-    <input type="text" class="form-control form-control-sm jenis-input mb-2"
-           placeholder="Jenis bisnis (mis. Bengkel Mobil)">
+    <div class="wp-label">Jenis bisnis</div>
+    <div class="jenis-host mb-2"></div>
+    <div class="wp-label">Wilayah</div>
     <div class="wilayah-host"></div>
     <div class="text-end mt-2">
       <button class="btn btn-outline-danger btn-sm" onclick="removeTarget(this)">
@@ -353,13 +390,20 @@ function removeTarget(btn) {
   hitungEstimasi();
 }
 
-/** 1 jenis bisnis × N wilayah → N target terpisah, format lama {jenis, area, coords}. */
+/**
+ * M jenis bisnis × N wilayah → M×N target terpisah.
+ *
+ * Bentuk yang dikirim ke server tetap {jenis, area, coords} seperti dulu, jadi
+ * scrapers/gmaps.py tidak perlu tahu bahwa pemilihannya sekarang jamak.
+ */
 function kumpulkanTargets() {
   const targets = [];
-  pickers.forEach(({ row, picker }) => {
-    const jenis = row.querySelector('.jenis-input').value.trim();
-    if (!jenis) return;
-    picker.nilai().forEach(w => targets.push({ jenis, area: w.area, coords: w.coords }));
+  pickers.forEach(({ picker, jenis }) => {
+    const daftarJenis = jenis.nilai();
+    const daftarWilayah = picker.nilai();
+    daftarJenis.forEach(j => {
+      daftarWilayah.forEach(w => targets.push({ jenis: j, area: w.area, coords: w.coords }));
+    });
   });
   return targets;
 }
@@ -367,24 +411,90 @@ function kumpulkanTargets() {
 function hitungEstimasi() {
   const n = kumpulkanTargets().length;
   const max = parseInt(document.getElementById('maxResults').value) || 0;
+  const konkuren = Math.max(1, parseInt(document.getElementById('listingKonkuren').value) || 1);
   const el = document.getElementById('estimasi');
   if (!n || !max) { el.textContent = ''; return; }
-  let detik = n * max * 6 + n * 25;
+  // Membuka listing dibagi jumlah yang jalan bersamaan; navigasi feed per
+  // pencarian tetap berurutan.
+  let detik = (n * max * 6) / konkuren + n * 25;
   if (document.getElementById('enrichWebsite').checked) detik *= 1.3;
   const menit = Math.round(detik / 60);
+  const jam = (menit / 60).toFixed(1);
+  const lama = menit > 180, banyak = n > 200;
   el.innerHTML = `<i class="bi bi-clock me-1"></i>${n} pencarian × ${max} hasil — perkiraan
-    <strong>${menit < 1 ? '<1' : menit} menit</strong>`;
+    <strong>${menit < 1 ? '<1' : (menit > 90 ? jam + ' jam' : menit + ' menit')}</strong>`;
+  if (banyak || lama) {
+    el.innerHTML += `<div class="text-danger mt-1" style="font-size:.72rem">
+      <i class="bi bi-exclamation-triangle me-1"></i>${banyak ? n + ' target sekali jalan' : 'Perkiraan lebih dari 3 jam'} —
+      pecah jadi beberapa run supaya kalau ada yang gagal tidak mengulang semuanya.</div>`;
+  }
 }
 
 function toggleDedup(cb) {
   document.getElementById('dedupOpsi').style.display = cb.checked ? '' : 'none';
 }
 
+/**
+ * Preset filter: satu klik menyetel kombinasi yang memang masuk akal untuk satu
+ * tujuan. Ini juga mencegah kombinasi yang saling meniadakan — "wajib email" +
+ * "hanya bisnis tanpa website" tidak akan pernah menghasilkan apa pun, karena
+ * email dipanen DARI website bisnis.
+ */
+const PRESET = {
+  website: {
+    modeKontak: 'wa', requireNoWebsite: true, enrichWebsite: true,
+    info: 'Bisnis yang belum punya website, dihubungi lewat WhatsApp — calon pembeli jasa pembuatan website.'
+  },
+  email: {
+    modeKontak: 'email', requireNoWebsite: false, enrichWebsite: true,
+    info: 'Menyasar bisnis yang PUNYA website, karena dari situlah emailnya dipanen. Mereka tetap prospek kuat untuk jasa redesign & iklan. "Periksa website" wajib menyala.'
+  },
+  luas: {
+    modeKontak: 'apa_saja', requireNoWebsite: false, enrichWebsite: true,
+    info: 'Jaring sebanyak mungkin: apa pun kontaknya, punya website atau tidak. Pakai kalau sedang mengejar volume.'
+  }
+};
+
+function pakaiPreset(nama) {
+  const p = PRESET[nama];
+  if (!p) return;
+  document.getElementById('modeKontak').value = p.modeKontak;
+  document.getElementById('requireNoWebsite').checked = p.requireNoWebsite;
+  document.getElementById('enrichWebsite').checked = p.enrichWebsite;
+  document.getElementById('presetInfo').innerHTML =
+    `<i class="bi bi-info-circle me-1"></i>${p.info}`;
+  cekFilterKetat();
+  hitungEstimasi();
+}
+
 /** Peringatkan sebelum dijalankan kalau kombinasi filter kemungkinan besar nihil. */
 function cekFilterKetat() {
+  const mode = document.getElementById('modeKontak').value;
+  const tanpaWeb = document.getElementById('requireNoWebsite').checked;
+  const infoEl = document.getElementById('infoKontak');
+
+  // Kombinasi yang tidak mungkin berhasil, bukan sekadar ketat.
+  if (mode === 'email' && tanpaWeb) {
+    infoEl.className = 'form-text mb-2 text-danger';
+    infoEl.innerHTML = `<i class="bi bi-x-octagon me-1"></i><strong>Kombinasi ini pasti nol hasil.</strong>
+      Email dipanen dari website bisnis — bisnis tanpa website tidak punya sumber email.
+      Matikan "Hanya bisnis TANPA website".`;
+  } else if (mode === 'email' && !document.getElementById('enrichWebsite').checked) {
+    infoEl.className = 'form-text mb-2 text-danger';
+    infoEl.innerHTML = `<i class="bi bi-x-octagon me-1"></i>Nyalakan "Periksa website tiap lead" —
+      tanpa itu email tidak pernah dipanen.`;
+  } else if (mode === 'email') {
+    infoEl.className = 'form-text mb-2 text-muted';
+    infoEl.innerHTML = 'Email dipanen dari website bisnis saat "Periksa website" berjalan.';
+  } else {
+    infoEl.className = 'form-text mb-2 d-none';
+    infoEl.innerHTML = '';
+  }
+
   const ketat = [];
-  if (document.getElementById('requireNoWebsite').checked) ketat.push('tanpa website');
-  if (document.getElementById('requireWhatsapp').checked) ketat.push('wajib WhatsApp');
+  if (tanpaWeb) ketat.push('tanpa website');
+  if (mode === 'wa') ketat.push('wajib WhatsApp');
+  if (mode === 'email') ketat.push('wajib email');
   if (document.getElementById('filterRating').checked &&
       parseFloat(document.getElementById('minRating').value) >= 4) ketat.push('rating ≥ 4');
   if (document.getElementById('filterReviews').checked &&
@@ -430,7 +540,7 @@ function cekProxy(btn) {
 function runGmaps() {
   const targets = kumpulkanTargets();
   if (!targets.length) {
-    alert('Isi jenis bisnis dan pilih minimal satu wilayah.');
+    alert('Pilih minimal satu jenis bisnis DAN satu wilayah.');
     return;
   }
 
@@ -442,12 +552,12 @@ function runGmaps() {
     min_rating: parseFloat(document.getElementById('minRating').value),
     filter_reviews: document.getElementById('filterReviews').checked,
     min_reviews: parseInt(document.getElementById('minReviews').value),
-    require_phone: document.getElementById('requirePhone').checked,
-    require_whatsapp: document.getElementById('requireWhatsapp').checked,
+    mode_kontak: document.getElementById('modeKontak').value,
     require_no_website: document.getElementById('requireNoWebsite').checked,
     sertakan_bisnis_tutup: document.getElementById('sertakanTutup').checked,
     output_format: document.getElementById('outputFormat').value,
     headless: document.getElementById('headlessMode').checked,
+    listing_konkuren: parseInt(document.getElementById('listingKonkuren').value) || 3,
 
     dedup_enabled: document.getElementById('dedupEnabled').checked,
     dedup_bulan: parseInt(document.getElementById('dedupBulan').value) || 6,

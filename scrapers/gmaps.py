@@ -77,7 +77,12 @@ def _get_apify_proxy(params=None, session_id=None):
     """
     import config as cfg
     p = params or {}
-    if not (p.get("use_proxy") or getattr(cfg, "USE_PROXY", False)):
+    # `use_proxy` dari form web bisa bernilai False secara sengaja. Memakai
+    # `p.get(...) or cfg.USE_PROXY` membuat False itu falsy dan nilai config yang
+    # menang — sakelar proxy di UI jadi tidak bisa dimatikan.
+    aktif = (bool(p["use_proxy"]) if "use_proxy" in p
+             else bool(getattr(cfg, "USE_PROXY", False)))
+    if not aktif:
         return None
     if session_id is None:
         session_id = uuid.uuid4().hex[:10]
@@ -152,79 +157,83 @@ def _koordinat_dari_href(href):
     return f"{m.group(1)},{m.group(2)}" if m else ""
 
 
+# Mode kontak: satu pilihan menggantikan pasangan sakelar require_phone +
+# require_whatsapp, yang dulu tidak punya cara untuk mengatakan "email saja juga
+# boleh" — lead yang cuma punya email selalu terbuang padahal bisa di-blast email.
+MODE_WA = "wa"
+MODE_TELEPON = "telepon"
+MODE_EMAIL = "email"
+MODE_APA_SAJA = "apa_saja"
+MODE_BEBAS = "bebas"
+
+
+def _mode_kontak(f):
+    """
+    Baca mode kontak dari dict filter, dengan terjemahan dari sakelar lama.
+
+    config.py dan run lama masih mengirim require_phone/require_whatsapp, jadi
+    keduanya tetap dihormati selama `mode_kontak` tidak diisi.
+    """
+    mode = str(f.get("mode_kontak") or "").strip().lower()
+    if mode in (MODE_WA, MODE_TELEPON, MODE_EMAIL, MODE_APA_SAJA, MODE_BEBAS):
+        return mode
+    if f.get("require_whatsapp"):
+        return MODE_WA
+    if f.get("require_phone"):
+        return MODE_TELEPON
+    return MODE_BEBAS
+
+
+def _kontak_kurang(row, mode):
+    """Alasan lead ini gugur syarat kontak, atau None bila lolos."""
+    telepon = row.get("telepon")
+    email = str(row.get("email") or "").strip()
+    if mode == MODE_WA:
+        return None if _is_wa(telepon) else "bukan nomor HP/WhatsApp"
+    if mode == MODE_TELEPON:
+        return None if telepon else "tidak ada nomor telepon"
+    if mode == MODE_EMAIL:
+        return None if email else "tidak ada email"
+    if mode == MODE_APA_SAJA:
+        punya = (telepon or email or str(row.get("instagram") or "").strip()
+                 or str(row.get("facebook") or "").strip())
+        return None if punya else "tidak ada kontak sama sekali"
+    return None
+
+
 def _passes_filter(row, f):
-    """Filter dengan tiap syarat digerbang sakelarnya sendiri (dict `f`)."""
+    """
+    Alasan lead ini dibuang filter akhir, atau None bila lolos.
+
+    Mengembalikan alasan (bukan cuma True/False) supaya run yang menghasilkan nol
+    lead bisa menjelaskan ke mana perginya semua listing, bukan sekadar melapor
+    "0 hasil" dan menyuruh user menebak filter mana yang terlalu ketat.
+    """
     if f.get("filter_rating"):
         try:
             if float(row.get("rating") or 0) < f.get("min_rating", 0):
-                return False
+                return f"rating < {f.get('min_rating', 0)}"
         except (TypeError, ValueError):
-            return False
+            return f"rating < {f.get('min_rating', 0)}"
     if f.get("filter_reviews"):
         try:
             if int(row.get("jumlah_ulasan") or 0) < f.get("min_reviews", 0):
-                return False
+                return f"ulasan < {f.get('min_reviews', 0)}"
         except (TypeError, ValueError):
-            return False
-    if f.get("require_phone") and not row.get("telepon"):
-        return False
-    if f.get("require_whatsapp") and not _is_wa(row.get("telepon")):
-        return False
+            return f"ulasan < {f.get('min_reviews', 0)}"
+    kurang = _kontak_kurang(row, _mode_kontak(f))
+    if kurang:
+        return kurang
     if f.get("require_no_website") and _has_website(row):
-        return False
+        return "sudah punya website"
     if not f.get("sertakan_tutup") and _bisnis_tutup(row):
-        return False
-    return True
+        return "bisnis tutup"
+    return None
 
 
 def _bisnis_tutup(row):
     s = str(row.get("status_buka") or "").lower()
     return any(t in s for t in STATUS_TUTUP)
-
-
-# ─── Scroll panel ─────────────────────────────────────────────────────────────
-
-async def _scroll_panel(page, max_results, cb, found_so_far, should_stop=None):
-    FEED = 'div[role="feed"]'
-    LINKS = 'div[role="feed"] a[href*="/maps/place/"]'
-    END_TEXTS = ["You've reached the end", "Anda telah mencapai akhir"]
-
-    stale = 0
-    prev = 0
-    while True:
-        if should_stop and should_stop():
-            break
-        current = await page.query_selector_all(LINKS)
-        count = len(current)
-
-        if max_results and count >= max_results:
-            break
-
-        try:
-            last = await page.query_selector(f"{FEED} > div:last-child")
-            if last:
-                txt = await last.inner_text()
-                if any(p.lower() in txt.lower() for p in END_TEXTS):
-                    break
-        except Exception:
-            pass
-
-        if count == prev:
-            stale += 1
-            if stale >= 2:
-                break
-        else:
-            stale = 0
-        prev = count
-
-        await page.evaluate(
-            "(s)=>{const e=document.querySelector(s);if(e)e.scrollTop=e.scrollHeight;}", FEED
-        )
-        cb(None, f"Scroll... {count} listing termuat", found_so_far)
-        await _random_delay(1.5, 2.5)
-
-    final = await page.query_selector_all(LINKS)
-    return len(final)
 
 
 # ─── Kartu feed (untuk filter awal) ───────────────────────────────────────────
@@ -268,38 +277,98 @@ def _baca_rating_kartu(teks):
             return None, None
     return None, None
 
+# Kartu feed menyimpan jauh lebih banyak daripada yang dulu dipanen. Contoh nyata
+# satu kartu (Depok, Agustus 2026):
+#
+#   Bengkel Dokter Mobil Depok
+#   4,6
+#   Bengkel Mobil · Jl. Raya Sawangan Blk. K No.kav.286
+#   Tutup · Buka Jum pukul 09.00 · 0813-1899-8477
+#   Situs Web · Rute
+#
+# Telepon, kategori, alamat, status buka, dan ADA/TIDAKNYA website semuanya sudah
+# terlihat. Karena itu tautan keluar ikut diambil: kehadirannya adalah bukti pasti
+# bisnis ini punya website, dan itu satu halaman detail yang tidak perlu dibuka.
 _JS_KARTU = """() => {
   const out = [];
   document.querySelectorAll('div[role="feed"] a[href*="/maps/place/"]').forEach(a => {
     const kartu = a.closest('div[role="feed"] > div') || a.parentElement;
+    let situs = '';
+    if (kartu) {
+      const luar = [...kartu.querySelectorAll('a[href]')]
+        .map(x => x.href)
+        .filter(h => h && !h.includes('/maps/') && !h.startsWith('javascript'));
+      situs = luar[0] || '';
+    }
     out.push({
       href: a.href,
       nama: a.getAttribute('aria-label') || '',
-      teks: kartu ? kartu.innerText : ''
+      teks: kartu ? kartu.innerText : '',
+      situs: situs
     });
   });
   return out;
 }"""
 
+# Nomor telepon Indonesia sebagaimana ditampilkan Google di kartu:
+#   0813-1899-8477 · 0881-2577-793 · (021) 78880202 · +62 812-3456-7890
+_RE_TELEPON_KARTU = re.compile(
+    r"(?:\+62|\(0\d{2,4}\)|0)[\d\s().-]{6,15}\d"
+)
+
+
+def _baca_telepon_kartu(teks):
+    """
+    Nomor telepon dari teks kartu feed, atau None bila tidak ada.
+
+    Dipakai hanya untuk MEMBUANG lebih awal (nomor kabel saat yang dicari WA),
+    tidak pernah untuk meloloskan: kartu yang tidak menampilkan nomor belum tentu
+    tidak punya nomor, halaman detailnya yang menentukan.
+    """
+    for baris in str(teks or "").splitlines():
+        # Baris jam operasional penuh angka dan mudah tertukar dengan nomor.
+        if "Buka" in baris or "Tutup" in baris:
+            # Nomor biasanya di ujung baris ini, sesudah "·".
+            baris = baris.split("·")[-1]
+        m = _RE_TELEPON_KARTU.search(baris)
+        if m:
+            kandidat = m.group().strip()
+            if len(re.sub(r"\D", "", kandidat)) >= 8:
+                return kandidat
+    return None
+
+
+def _baca_kategori_kartu(teks):
+    """Kategori bisnis = potongan pertama pada baris yang memuat '·' setelah rating."""
+    for baris in str(teks or "").splitlines():
+        if "·" not in baris:
+            continue
+        if "Buka" in baris or "Tutup" in baris:
+            continue
+        kandidat = baris.split("·")[0].strip()
+        # Alamat hampir selalu diawali "Jl."/"Jalan"; kategori tidak.
+        if kandidat and not re.match(r"(?i)^(jl\.?|jalan|gg\.?)\b", kandidat):
+            return kandidat
+    return None
+
 
 async def _kartu_feed(page, max_results):
     """
-    Ambil href + rating + jumlah ulasan langsung dari kartu di feed pencarian.
+    Ambil semua yang bisa dibaca dari kartu di feed pencarian.
 
     Dipakai untuk membuang listing yang jelas tidak lolos filter sebelum
-    halaman detailnya dibuka. Rating dibaca dari teks kartu (bukan nama kelas
+    halaman detailnya dibuka. Semuanya dibaca dari teks kartu (bukan nama kelas
     CSS Google yang berubah-ubah), jadi relatif tahan terhadap perubahan UI.
 
-    Kartu yang ratingnya tidak terbaca dikembalikan dengan rating None —
-    pemanggil TIDAK boleh membuangnya, supaya kegagalan baca tidak pernah
-    menghilangkan lead.
+    Field yang tidak terbaca dikembalikan None — pemanggil TIDAK boleh membuang
+    kartu karenanya, supaya kegagalan baca tidak pernah menghilangkan lead.
     """
     try:
         mentah = await page.evaluate(_JS_KARTU)
     except Exception:
         # Ekstraksi kartu gagal total — jatuh ke cara lama (href saja).
         els = await page.query_selector_all('div[role="feed"] a[href*="/maps/place/"]')
-        mentah = [{"href": h, "nama": "", "teks": ""}
+        mentah = [{"href": h, "nama": "", "teks": "", "situs": ""}
                   for el in els if (h := await el.get_attribute("href"))]
 
     kartu = []
@@ -309,12 +378,17 @@ async def _kartu_feed(page, max_results):
         if not href or href in dilihat:
             continue
         dilihat.add(href)
-        rating, ulasan = _baca_rating_kartu(m.get("teks"))
+        teks = m.get("teks") or ""
+        rating, ulasan = _baca_rating_kartu(teks)
         kartu.append({
             "href": href,
             "nama": (m.get("nama") or "").strip(),
             "rating": rating,
             "jumlah_ulasan": ulasan,
+            "telepon": _baca_telepon_kartu(teks),
+            "kategori": _baca_kategori_kartu(teks),
+            "website": (m.get("situs") or "").strip(),
+            "tutup": any(t in teks.lower() for t in STATUS_TUTUP),
         })
         if max_results and len(kartu) >= max_results:
             break
@@ -325,9 +399,14 @@ def _lolos_filter_awal(kartu, f):
     """
     True bila kartu ini layak dibuka halaman detailnya.
 
-    Hanya memeriksa syarat yang datanya sudah tersedia di kartu (rating dan
-    jumlah ulasan). Bila salah satunya tidak terbaca, kartu tetap diloloskan —
-    lebih baik membuka satu halaman ekstra daripada kehilangan lead.
+    Hanya memeriksa syarat yang jawabannya sudah PASTI dari kartu. Semua
+    pemeriksaan di sini satu arah: kartu hanya dibuang kalau datanya ada dan
+    jelas tidak lolos. Data yang tidak terbaca selalu diloloskan — lebih baik
+    membuka satu halaman ekstra daripada kehilangan lead.
+
+    Ini titik hemat terbesar di seluruh pipeline. Dengan filter "belum punya
+    website", sekitar tiga dari empat kartu bisa dibuang di sini — dulu keempatnya
+    dibuka dulu (±10 detik masing-masing) baru tiga di antaranya dibuang.
     """
     if f.get("filter_rating") and kartu.get("rating") is not None:
         if kartu["rating"] < f.get("min_rating", 0):
@@ -335,7 +414,85 @@ def _lolos_filter_awal(kartu, f):
     if f.get("filter_reviews") and kartu.get("jumlah_ulasan") is not None:
         if kartu["jumlah_ulasan"] < f.get("min_reviews", 0):
             return False
+    # Tautan keluar di kartu = bukti pasti punya website.
+    if f.get("require_no_website") and kartu.get("website"):
+        return False
+    # Nomor yang terlihat di kartu tapi jelas bukan seluler (mis. "(021) 788...").
+    if _mode_kontak(f) == MODE_WA and kartu.get("telepon"):
+        if not _is_wa(kartu["telepon"]):
+            return False
+    if not f.get("sertakan_tutup") and kartu.get("tutup"):
+        return False
     return True
+
+
+# ─── Scroll feed sampai kuota terpenuhi ───────────────────────────────────────
+
+# Dua batas keras: tanpa ini, filter yang hampir tidak ada yang lolos (mis. rating
+# 4.8 di area kecil) akan membuat scroll berjalan sampai feed Google habis.
+MAKS_PUTARAN_SCROLL = 30
+MAKS_LIPAT_KARTU = 8
+
+
+async def _kumpulkan_kartu(page, max_results, filters, cb, should_stop=None):
+    """
+    Scroll feed sampai terkumpul `max_results` kartu yang LOLOS filter awal.
+
+    Dulu scroll berhenti begitu JUMLAH KARTU mencapai max_results dan pemotongan
+    dilakukan di angka yang sama, sementara filter awal baru berjalan sesudahnya.
+    Artinya "maks 20 hasil" sebenarnya berarti "20 kartu pertama yang kebetulan
+    terlihat" — dengan filter rating 4.0 + minimal 5 ulasan, yang benar-benar
+    dibuka sering tinggal 5-10. Sekarang yang dihitung adalah kartu yang lolos,
+    jadi angka yang diminta user berarti angka yang dia dapat.
+
+    Mengembalikan SELURUH kartu yang terkumpul (belum difilter) supaya pemanggil
+    tetap bisa melaporkan berapa yang dibuang filter awal.
+    """
+    FEED = 'div[role="feed"]'
+    END_TEXTS = ["You've reached the end", "Anda telah mencapai akhir"]
+    batas_kartu = max_results * MAKS_LIPAT_KARTU if max_results else 0
+
+    kartu = []
+    stale = 0
+    prev = 0
+    for _ in range(MAKS_PUTARAN_SCROLL):
+        kartu = await _kartu_feed(page, None)
+        lolos = sum(1 for k in kartu if _lolos_filter_awal(k, filters))
+
+        if max_results and lolos >= max_results:
+            break
+        if should_stop and should_stop():
+            break
+        if batas_kartu and len(kartu) >= batas_kartu:
+            cb(None, f"⚠ Berhenti scroll di {len(kartu)} listing — baru {lolos} yang "
+                     f"lolos filter awal. Filter untuk area ini terlalu ketat.", 0)
+            break
+
+        try:
+            last = await page.query_selector(f"{FEED} > div:last-child")
+            if last:
+                txt = await last.inner_text()
+                if any(p.lower() in txt.lower() for p in END_TEXTS):
+                    break
+        except Exception:
+            pass
+
+        if len(kartu) == prev:
+            stale += 1
+            if stale >= 2:
+                break
+        else:
+            stale = 0
+        prev = len(kartu)
+
+        await page.evaluate(
+            "(s)=>{const e=document.querySelector(s);if(e)e.scrollTop=e.scrollHeight;}", FEED
+        )
+        cb(None, f"Scroll... {lolos}/{max_results or '∞'} lolos filter awal "
+                 f"({len(kartu)} listing termuat)", 0)
+        await _random_delay(1.5, 2.5)
+
+    return kartu
 
 
 # ─── Ekstrak detail ───────────────────────────────────────────────────────────
@@ -570,20 +727,31 @@ def _lengkapi_dari_db(row):
     return row
 
 
-def _rakit_row(data, href, area_tag, tanggal, kartu=None):
+def _rakit_row(data, href, area_tag, tanggal, kartu=None, place_key=None):
     """
     Lengkapi hasil ekstraksi jadi satu baris lead.
 
-    `kartu` berisi rating & jumlah ulasan yang dibaca dari feed pencarian.
-    Angka itu dipakai bila halaman detail tidak menyediakannya — pada UI Google
+    `kartu` berisi apa yang sudah terbaca dari feed pencarian. Nilainya dipakai
+    sebagai CADANGAN bila halaman detail tidak menyediakannya — pada UI Google
     sekarang jumlah ulasan sering memang tidak muncul di halaman detail,
-    sementara di kartu feed selalu ada.
+    sementara di kartu feed selalu ada. Halaman detail tetap jadi acuan utama
+    karena datanya lebih lengkap (alamat penuh, bukan potongan).
+
+    `place_key` WAJIB diisi pemanggil yang sudah menghitung kunci itu untuk
+    keputusan anti-duplikat. Menghitungnya ulang di sini dengan argumen yang
+    berbeda (di feed telepon & alamat belum diketahui) bisa menghasilkan kunci
+    lain, sehingga baris tersimpan di bawah kunci yang bukan kunci yang diperiksa.
     """
     if kartu:
         if data.get("rating") in (None, "", "-") and kartu.get("rating") is not None:
             data["rating"] = kartu["rating"]
         if data.get("jumlah_ulasan") is None and kartu.get("jumlah_ulasan") is not None:
             data["jumlah_ulasan"] = kartu["jumlah_ulasan"]
+        for field in ("telepon", "kategori", "website"):
+            if not data.get(field) and kartu.get(field):
+                data[field] = kartu[field]
+        if not data.get("nama_bisnis") and kartu.get("nama"):
+            data["nama_bisnis"] = kartu["nama"]
 
     data["whatsapp_link"] = _wa_link(data.get("telepon"))
     data["koordinat"] = _koordinat_dari_href(href)
@@ -591,7 +759,7 @@ def _rakit_row(data, href, area_tag, tanggal, kartu=None):
     data["status_leads"] = "Belum Dihubungi"
     data["tanggal_scraping"] = tanggal
     data["source_url"] = href
-    data["place_key"] = db.place_key_from_href(
+    data["place_key"] = place_key or db.place_key_from_href(
         href, nama=data.get("nama_bisnis"), alamat=data.get("alamat"),
         telepon=data.get("telepon"),
     )
@@ -665,10 +833,15 @@ async def _scrape_query(browser, ua, query, area_tag, max_results, params, cb,
                 return hasil
 
         await _random_delay()
-        await _scroll_panel(page, max_results, cb, 0, should_stop)
-        kartu = await _kartu_feed(page, max_results)
+        kartu = await _kumpulkan_kartu(page, max_results, filters, cb, should_stop)
     except _SatuHasil:
         pass
+    except Exception as e:
+        # Fase 1 gagal tak terduga: kembalikan `hasil` kosong, jangan melempar —
+        # pemanggil menghitung subtotal dari nilai balik ini.
+        cb(offset_pct + range_pct,
+           f"⚠ Gagal membuka daftar hasil '{query}': {type(e).__name__}: {e}", 0)
+        return hasil
     finally:
         await context.close()
 
@@ -677,8 +850,9 @@ async def _scrape_query(browser, ua, query, area_tag, max_results, params, cb,
 
     # ── Filter awal: buang yang jelas tidak lolos SEBELUM halamannya dibuka ──
     total_kartu = len(kartu)
-    kartu = [k for k in kartu if _lolos_filter_awal(k, filters)]
-    hasil["filter_awal"] = total_kartu - len(kartu)
+    lolos_awal = [k for k in kartu if _lolos_filter_awal(k, filters)]
+    hasil["filter_awal"] = total_kartu - len(lolos_awal)
+    kartu = lolos_awal[:max_results] if max_results else lolos_awal
     if hasil["filter_awal"]:
         hemat = hasil["filter_awal"] * 6 / 60
         cb(offset_pct,
@@ -688,83 +862,146 @@ async def _scrape_query(browser, ua, query, area_tag, max_results, params, cb,
     tanggal = datetime.now().strftime("%Y-%m-%d %H:%M")
     total = len(kartu)
 
-    # ── Fase 2: kunjungi listing yang lolos ──
-    for idx, k in enumerate(kartu, 1):
-        if should_stop and should_stop():
-            cb(None, "⏹ Dihentikan oleh pengguna.", len(hasil["baru"]))
-            break
+    # ── Fase 2: kunjungi listing yang lolos, beberapa sekaligus ──
+    # Dulu listing dibuka satu per satu: ±10 detik masing-masing, jadi 20 listing
+    # = ±3 menit yang hampir seluruhnya cuma menunggu jaringan. Pola semaphore +
+    # gather ini sama persis dengan yang sudah dipakai enrich.enrich_banyak.
+    # Tiap listing memang sudah punya context & IP sendiri (_buka_listing), jadi
+    # yang berubah hanya penjadwalannya.
+    konkuren = max(1, min(int(params.get("listing_konkuren") or 3), 8))
+    sem = asyncio.Semaphore(konkuren)
+    selesai = 0
 
+    def _pct():
+        return offset_pct + int((selesai / total) * range_pct) if total else offset_pct
+
+    async def _kerjakan(idx, k):
+        nonlocal selesai
+        if should_stop and should_stop():
+            return
+        async with sem:
+            if should_stop and should_stop():
+                return
+            await _satu_listing(idx, k)
+            selesai += 1
+
+    async def _satu_listing(idx, k):
         href = k["href"]
-        pct = offset_pct + int((idx / total) * range_pct) if total else offset_pct
+        pct = _pct()
         place_key = db.place_key_from_href(href, nama=k.get("nama"))
 
-        status = db.classify(place_key, dedup_bulan) if dedup_aktif else db.BARU
-        tersimpan = db.get(place_key) if status != db.BARU else None
-        # Kartu feed tidak selalu punya nama (mis. saat pencarian langsung
-        # membuka satu bisnis) — pakai nama dari database supaya log tetap jelas.
-        nama_tampil = k.get("nama") or (tersimpan or {}).get("nama_bisnis") or "?"
+        # Satu listing yang bermasalah tidak boleh menghanguskan lead yang sudah
+        # terkumpul di target ini: `hasil` hanya sampai ke pemanggil lewat nilai
+        # balik, jadi exception yang lolos dari sini membuang semuanya.
+        try:
+            status = db.classify(place_key, dedup_bulan) if dedup_aktif else db.BARU
+            tersimpan = db.get(place_key) if status != db.BARU else None
+            # Kartu feed tidak selalu punya nama (mis. saat pencarian langsung
+            # membuka satu bisnis) — pakai nama dari database supaya log tetap jelas.
+            nama_tampil = k.get("nama") or (tersimpan or {}).get("nama_bisnis") or "?"
 
-        # ── Bisnis lama yang masih dalam masa tenggang ──
-        if status == db.LAMA_SEGAR:
-            umur = db.umur_hari(place_key) or 0
-            if not (refresh_aktif and db.perlu_refresh_kontak(place_key, refresh_hari)):
-                hasil["dilewati"] += 1
-                cb(pct, f"⏭ Dilewati: {nama_tampil} "
-                        f"(sudah ada, {umur} hari lalu)", len(hasil["baru"]))
-                continue
+            # ── Bisnis lama yang masih dalam masa tenggang ──
+            if status == db.LAMA_SEGAR:
+                umur = db.umur_hari(place_key) or 0
+                if not (refresh_aktif and db.perlu_refresh_kontak(place_key, refresh_hari)):
+                    hasil["dilewati"] += 1
+                    cb(pct, f"⏭ Dilewati: {nama_tampil} "
+                            f"(sudah ada, {umur} hari lalu)", len(hasil["baru"]))
+                    return
 
-            cb(pct, f"[{idx}/{total}] 🔄 Cek perubahan kontak: {nama_tampil}",
+                cb(pct, f"[{idx}/{total}] 🔄 Cek perubahan kontak: {nama_tampil}",
+                   len(hasil["baru"]))
+                data, galat = await _buka_listing(browser, ua, href, params)
+                if data is None:
+                    hasil["dilewati"] += 1
+                    cb(pct, f"⚠ Gagal cek {nama_tampil}: {galat}", len(hasil["baru"]))
+                    await _random_delay()
+                    return
+
+                perubahan = db.refresh_contacts(
+                    place_key,
+                    telepon=data.get("telepon"),
+                    website=data.get("website"),
+                )
+                if perubahan:
+                    lama = db.get(place_key) or {}
+                    baris = dict(lama)
+                    baris.update(_rakit_row(data, href, area_tag, tanggal, k,
+                                            place_key=place_key))
+                    # _rakit_row menandai setiap baris "Belum Dihubungi" karena
+                    # dirancang untuk lead baru. Untuk bisnis yang sudah ada, itu
+                    # menghapus hasil kerja user di sheet Update Kontak — lead
+                    # yang sudah "Deal" terbaca seolah belum pernah disentuh.
+                    for kol in db.KOLOM_MILIK_USER:
+                        if lama.get(kol) not in (None, ""):
+                            baris[kol] = lama[kol]
+                    baris["perubahan"] = "; ".join(
+                        f"{p['field']}: {p['lama'] or '(kosong)'} → {p['baru']}"
+                        for p in perubahan
+                    )
+                    baris["_website_berubah"] = any(p["field"] == "website"
+                                                    for p in perubahan)
+                    hasil["update"].append(baris)
+                    cb(pct, f"🔄 Update: {baris.get('nama_bisnis', '?')} | "
+                            f"{baris['perubahan']}", len(hasil["baru"]))
+                else:
+                    hasil["dilewati"] += 1
+                    cb(pct, f"✓ Tidak ada perubahan: {nama_tampil}",
+                       len(hasil["baru"]))
+                await _random_delay()
+                return
+
+            # ── Bisnis baru atau sudah kedaluwarsa → ambil penuh ──
+            label = "✨ Baru" if status == db.BARU else "♻ Data kedaluwarsa, diambil ulang"
+            cb(pct, f"[{idx}/{total}] {label}: "
+                    f"{nama_tampil if nama_tampil != '?' else 'mengambil detail...'}",
                len(hasil["baru"]))
+
             data, galat = await _buka_listing(browser, ua, href, params)
             if data is None:
-                hasil["dilewati"] += 1
-                cb(pct, f"⚠ Gagal cek {nama_tampil}: {galat}", len(hasil["baru"]))
+                hasil["gagal"] += 1
+                cb(pct, f"⚠ Listing {idx} dilewati: {galat}", len(hasil["baru"]))
                 await _random_delay()
-                continue
+                return
 
-            perubahan = db.refresh_contacts(
-                place_key,
-                telepon=data.get("telepon"),
-                website=data.get("website"),
-            )
-            if perubahan:
-                lama = db.get(place_key) or {}
-                baris = dict(lama)
-                baris.update(_rakit_row(data, href, area_tag, tanggal, k))
-                baris["perubahan"] = "; ".join(
-                    f"{p['field']}: {p['lama'] or '(kosong)'} → {p['baru']}"
-                    for p in perubahan
+            # Kunci dari kartu feed dihitung tanpa telepon & alamat — keduanya
+            # baru diketahui sekarang. Selama href memuat CID Google kunci itu
+            # sudah final; kalau tidak, kunci yang kaya bisa berbeda, dan baris
+            # akan tersimpan di bawah kunci yang BUKAN kunci yang tadi diperiksa.
+            kunci = place_key
+            if not str(kunci).startswith("cid:"):
+                kunci_kaya = db.place_key_from_href(
+                    href, nama=data.get("nama_bisnis"), alamat=data.get("alamat"),
+                    telepon=data.get("telepon"),
                 )
-                baris["_website_berubah"] = any(p["field"] == "website" for p in perubahan)
-                hasil["update"].append(baris)
-                cb(pct, f"🔄 Update: {baris.get('nama_bisnis', '?')} | "
-                        f"{baris['perubahan']}", len(hasil["baru"]))
-            else:
-                hasil["dilewati"] += 1
-                cb(pct, f"✓ Tidak ada perubahan: {nama_tampil}",
-                   len(hasil["baru"]))
+                if kunci_kaya and kunci_kaya != kunci:
+                    kunci = kunci_kaya
+                    # Klasifikasi tadi dijalankan atas kunci yang keliru — ulangi,
+                    # kalau tidak bisnis ini masuk lagi sebagai lead "baru".
+                    if dedup_aktif and db.classify(kunci, dedup_bulan) == db.LAMA_SEGAR:
+                        hasil["dilewati"] += 1
+                        cb(pct, f"⏭ Dilewati: {data.get('nama_bisnis') or nama_tampil} "
+                                f"(sudah ada — ketahuan setelah detail dibaca)",
+                           len(hasil["baru"]))
+                        await _random_delay()
+                        return
+
+            baris = _rakit_row(data, href, area_tag, tanggal, k, place_key=kunci)
+            hasil["baru"].append(baris)
+            cb(pct, f"✓ {baris.get('nama_bisnis', '?')} | "
+                    f"⭐{baris.get('rating') or '-'} ({baris.get('jumlah_ulasan') or 0}) | "
+                    f"Tel: {baris.get('telepon') or '-'}", len(hasil["baru"]))
             await _random_delay()
-            continue
-
-        # ── Bisnis baru atau sudah kedaluwarsa → ambil penuh ──
-        label = "✨ Baru" if status == db.BARU else "♻ Data kedaluwarsa, diambil ulang"
-        cb(pct, f"[{idx}/{total}] {label}: "
-                f"{nama_tampil if nama_tampil != '?' else 'mengambil detail...'}",
-           len(hasil["baru"]))
-
-        data, galat = await _buka_listing(browser, ua, href, params)
-        if data is None:
+        except Exception as e:
             hasil["gagal"] += 1
-            cb(pct, f"⚠ Listing {idx} dilewati: {galat}", len(hasil["baru"]))
-            await _random_delay()
-            continue
+            cb(pct, f"⚠ Listing {idx} gagal: {type(e).__name__}: {e}",
+               len(hasil["baru"]))
 
-        baris = _rakit_row(data, href, area_tag, tanggal, k)
-        hasil["baru"].append(baris)
-        cb(pct, f"✓ {baris.get('nama_bisnis', '?')} | "
-                f"⭐{baris.get('rating') or '-'} ({baris.get('jumlah_ulasan') or 0}) | "
-                f"Tel: {baris.get('telepon') or '-'}", len(hasil["baru"]))
-        await _random_delay()
+    if konkuren > 1:
+        cb(offset_pct, f"Membuka {total} listing, {konkuren} sekaligus...", 0)
+    await asyncio.gather(*(_kerjakan(i, k) for i, k in enumerate(kartu, 1)))
+    if should_stop and should_stop():
+        cb(None, "⏹ Dihentikan oleh pengguna.", len(hasil["baru"]))
 
     return hasil
 
@@ -862,7 +1099,7 @@ async def _async_main(params, cb, should_stop=None):
         return params[nama] if nama in params else getattr(cfg, nama.upper(), default)
 
     search_targets = params.get("search_targets", [])
-    max_results = int(params.get("max_results", 20))
+    max_results = int(params.get("max_results") or 20)
     filter_flags = {
         "filter_rating":      bool(params.get("filter_rating", True)),
         "min_rating":         float(params.get("min_rating", 0.0) or 0),
@@ -872,8 +1109,16 @@ async def _async_main(params, cb, should_stop=None):
         "require_whatsapp":   bool(params.get("require_whatsapp", True)),
         "require_no_website": bool(params.get("require_no_website", True)),
         "sertakan_tutup":     bool(opsi("sertakan_bisnis_tutup", False)),
+        # Diselesaikan sekali di sini supaya _passes_filter dan _lolos_filter_awal
+        # membaca mode yang sama, tanpa masing-masing menebak dari sakelar lama.
+        "mode_kontak":        _mode_kontak({
+            "mode_kontak":      opsi("mode_kontak", ""),
+            "require_phone":    bool(params.get("require_phone", True)),
+            "require_whatsapp": bool(params.get("require_whatsapp", True)),
+        }),
     }
     params["_filters"] = filter_flags
+    params.setdefault("listing_konkuren", int(opsi("listing_konkuren", 3) or 3))
     params.setdefault("dedup_enabled", bool(opsi("dedup_enabled", True)))
     params.setdefault("dedup_bulan", float(opsi("dedup_bulan", 6) or 6))
     params.setdefault("refresh_kontak", bool(opsi("refresh_kontak", True)))
@@ -1023,7 +1268,13 @@ async def _async_main(params, cb, should_stop=None):
         cb(90, "⚠ Gemini dilewati — API key tidak diisi", len(semua_baru))
 
     # ── Filter akhir (syarat yang butuh data detail) ──
-    lolos = [r for r in semua_baru if _passes_filter(r, filter_flags)]
+    lolos, sebab_buang = [], {}
+    for r in semua_baru:
+        alasan = _passes_filter(r, filter_flags)
+        if alasan is None:
+            lolos.append(r)
+        else:
+            sebab_buang[alasan] = sebab_buang.get(alasan, 0) + 1
     dibuang_filter = len(semua_baru) - len(lolos)
     lolos.sort(key=lambda r: r.get("skor_pembeli", 0), reverse=True)
     semua_update.sort(key=lambda r: r.get("skor_pembeli", 0), reverse=True)
@@ -1042,8 +1293,70 @@ async def _async_main(params, cb, should_stop=None):
         "Hasil Gemini (perlu verifikasi)": len(hasil_gemini),
     }
 
+    if not (lolos or semua_update or hasil_gemini):
+        _lapor_nol(ringkasan, sebab_buang, filter_flags, cb)
+        return None
+
     return _tulis_output(lolos, semua_update, hasil_gemini, ringkasan,
                          output_format, cb)
+
+
+def _saran_pelonggaran(ringkasan, sebab_buang, f):
+    """Saran konkret berdasarkan penyebab yang PALING banyak membuang lead."""
+    if sebab_buang:
+        terbesar = max(sebab_buang, key=sebab_buang.get)
+        if terbesar == "sudah punya website":
+            return ('matikan "wajib belum punya website" — bisnis yang sudah punya '
+                    'website tetap prospek untuk jasa redesign & iklan')
+        if terbesar.startswith("bukan nomor HP"):
+            return 'longgarkan Kontak wajib jadi "telepon apa pun" atau "salah satu ada"'
+        if terbesar == "tidak ada email":
+            return ('email hanya bisa dipanen dari website bisnis — matikan "wajib '
+                    'belum punya website" dan pastikan Periksa Website menyala')
+        if terbesar.startswith("rating") or terbesar.startswith("ulasan"):
+            return "turunkan rating/ulasan minimum"
+        if terbesar == "bisnis tutup":
+            return "hampir semua listing di area ini sudah tutup — coba wilayah lain"
+    # Anti-duplikat diperiksa lebih dulu daripada filter awal: kalau SEMUA listing
+    # yang lolos filter ternyata sudah ada di database, melonggarkan rating tidak
+    # menolong sama sekali — yang perlu diganti adalah wilayahnya.
+    if ringkasan["Dilewati — sudah ada di database"]:
+        return ("wilayah ini sudah pernah dipanen — pilih wilayah/jenis bisnis lain, "
+                "atau turunkan jeda anti-duplikat")
+    if ringkasan["Dilewati — filter awal dari feed"] > ringkasan["Gagal dibuka"]:
+        return "turunkan rating/ulasan minimum — kebanyakan listing gugur sejak di feed"
+    if ringkasan["Gagal dibuka"]:
+        return ("semua listing gagal dibuka — cek koneksi, atau matikan proxy kalau "
+                "tokennya belum diisi")
+    return "coba wilayah atau jenis bisnis yang lain"
+
+
+def _lapor_nol(ringkasan, sebab_buang, f, cb):
+    """
+    Jelaskan ke mana perginya semua listing saat hasilnya nol.
+
+    File Excel sengaja TIDAK ditulis: run nol-lead dulu tetap menghasilkan file
+    yang isinya cuma baris judul, menumpuk di folder output tanpa memberi tahu
+    apa pun. Yang dibutuhkan user bukan filenya, tapi sebabnya.
+    """
+    baris = [
+        "⚠ 0 lead — tidak ada file dibuat.",
+        f"   {ringkasan['Dilewati — filter awal dari feed']} dibuang filter awal "
+        f"(rating/ulasan, sebelum halaman dibuka)",
+        f"   {ringkasan['Dilewati — sudah ada di database']} dilewati — sudah ada di database",
+        f"   {ringkasan['Dibuang filter akhir']} dibuang filter akhir"
+        + (":" if sebab_buang else ""),
+    ]
+    for alasan, n in sorted(sebab_buang.items(), key=lambda x: -x[1]):
+        baris.append(f"      • {n} {alasan}")
+    if ringkasan["Duplikat dalam run ini"]:
+        baris.append(f"   {ringkasan['Duplikat dalam run ini']} duplikat dalam run ini")
+    if ringkasan["Gagal dibuka"]:
+        baris.append(f"   {ringkasan['Gagal dibuka']} gagal dibuka")
+    baris.append(f"   → Saran: {_saran_pelonggaran(ringkasan, sebab_buang, f)}")
+    for b in baris:
+        cb(None, b, 0)
+    cb(98, "Selesai tanpa hasil — tidak ada file yang ditulis.", 0)
 
 
 # ─── Penulisan file ───────────────────────────────────────────────────────────
@@ -1120,10 +1433,18 @@ def _save_excel(sheets, base, ringkasan=None):
             lebar = {"alasan_pitch": 55, "jasa_utama": 26, "jasa_pendukung": 30,
                      "alamat": 40, "perubahan": 45}.get(col)
             if lebar is None:
-                try:
-                    lebar = min(max(df[col].astype(str).map(len).max(), len(col)) + 2, 40)
-                except (ValueError, TypeError):
-                    lebar = 15
+                # Pada sheet tanpa baris, .max() mengembalikan NaN — dan di Python
+                # max(NaN, 5) tetap NaN, begitu juga min(NaN, 40). NaN yang lolos
+                # ke set_column ditulis sebagai width="nan" di XML, dan Excel
+                # menolak membuka filenya ("perlu diperbaiki"). Jadi lebar hanya
+                # dihitung kalau memang ada isinya.
+                lebar = max(len(col) + 2, 15)
+                if len(df):
+                    try:
+                        terpanjang = int(df[col].astype(str).map(len).max())
+                        lebar = min(max(terpanjang, len(col)) + 2, 40)
+                    except (ValueError, TypeError):
+                        pass
             ws.set_column(ci, ci, lebar)
 
         for ri in range(len(df)):

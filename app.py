@@ -114,9 +114,15 @@ def _jalankan(job_id, fungsi, params, label):
             if should_stop():
                 _update(job_id, status="dibatalkan", filename=filename,
                         message="⏹ Dihentikan — hasil sementara tetap disimpan.")
-            else:
+            elif filename:
                 _update(job_id, progress=100, status="done", filename=filename,
                         message=f"✅ {label} selesai!")
+            else:
+                # Scraper mengembalikan None saat tidak ada satu pun hasil: tidak
+                # ada file yang ditulis. Alasannya sudah dirinci di log job.
+                _update(job_id, progress=100, status="done",
+                        message=f"⚠ {label} selesai, tapi tidak ada hasil — "
+                                f"lihat rincian di log. Tidak ada file dibuat.")
         except Exception as e:
             _update(job_id, status="error", error=str(e), message=f"❌ Error: {e}")
 
@@ -186,22 +192,38 @@ def dashboard():
     return render_template("dashboard.html", recent=recent, stats=db.stats())
 
 
-# ─── Data wilayah (pemilih kota/kecamatan) ────────────────────────────────────
+# ─── Data pemilih target (wilayah & jenis bisnis) ─────────────────────────────
 
-_wilayah_cache = None
+_berkas_cache = {}
+
+
+def _json_data(nama, kosong):
+    """Baca satu berkas data JSON sekali lalu simpan di memori."""
+    if nama not in _berkas_cache:
+        berkas = DATA_DIR / nama
+        if not berkas.exists():
+            return kosong
+        with open(berkas, encoding="utf-8") as f:
+            _berkas_cache[nama] = json.load(f)
+    return _berkas_cache[nama]
 
 
 @app.route("/api/wilayah")
 def api_wilayah():
     """Daftar kota/kabupaten/kecamatan untuk widget pemilih target."""
-    global _wilayah_cache
-    if _wilayah_cache is None:
-        berkas = DATA_DIR / "wilayah.json"
-        if not berkas.exists():
-            return jsonify({"provinsi": []})
-        with open(berkas, encoding="utf-8") as f:
-            _wilayah_cache = json.load(f)
-    return jsonify(_wilayah_cache)
+    return jsonify(_json_data("wilayah.json", {"provinsi": []}))
+
+
+@app.route("/api/keywords")
+def api_keywords():
+    """
+    Pustaka jenis bisnis untuk widget pemilih target.
+
+    Kata kunci yang terlalu umum ("PT", "toko") menghasilkan kantor dan pabrik
+    yang jarang membeli jasa website; daftar ini berisi sektor yang nilai
+    transaksinya besar dan asetnya digitalnya biasanya lemah.
+    """
+    return jsonify(_json_data("keywords.json", {"sektor": []}))
 
 
 # ─── Google Maps ──────────────────────────────────────────────────────────────

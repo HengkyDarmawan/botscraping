@@ -28,8 +28,11 @@ _lock = threading.RLock()
 _HARI_PER_BULAN = 30.44
 
 # Kolom yang TIDAK boleh ditimpa saat upsert bisnis yang sudah ada:
-# ini hasil kerja manual user, bukan hasil scraping.
-_KOLOM_MILIK_USER = {"status_leads", "catatan", "tanggal_follow_up", "first_seen_at"}
+# ini hasil kerja manual user, bukan hasil scraping. Scraper juga memakainya
+# untuk memulihkan kolom ini saat merakit baris "Update Kontak", jadi namanya
+# publik; `_KOLOM_MILIK_USER` dipertahankan sebagai alias lama.
+KOLOM_MILIK_USER = {"status_leads", "catatan", "tanggal_follow_up", "first_seen_at"}
+_KOLOM_MILIK_USER = KOLOM_MILIK_USER
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS businesses (
@@ -292,11 +295,23 @@ def upsert_business(row):
     kolom CRM (status_leads/catatan/tanggal_follow_up) TIDAK ditimpa — itu hasil
     kerja manual user.
 
+    Baris yang datang tanpa skor dihitung skornya di sini. Ini titik jaga tunggal:
+    setiap lead di database dijamin punya skor_pembeli + tier, dari jalur mana pun
+    ia masuk. Tanpa ini, jaminan itu bergantung pada setiap pemanggil ingat
+    memanggil scoring.nilai_lead lebih dulu — dan satu yang lupa berarti lead
+    tanpa skor yang tidak akan pernah muncul di penyaringan tier.
+
     Return "insert" atau "update".
     """
     place_key = row.get("place_key")
     if not place_key:
         raise ValueError("upsert_business butuh place_key")
+
+    if row.get("skor_pembeli") in (None, "") or not row.get("tier"):
+        # Impor malas: db.py tetap bisa dipakai tanpa menyeret requests/bs4 yang
+        # dibutuhkan scrapers.scoring lewat scrapers.enrich.
+        from scrapers import scoring
+        scoring.nilai_lead(row, jumlah_cabang=hitung_cabang(row.get("nama_bisnis")))
 
     kolom_valid = set(_kolom_tabel())
     data = {k: v for k, v in row.items() if k in kolom_valid}

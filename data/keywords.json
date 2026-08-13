@@ -1,0 +1,177 @@
+{
+  "_catatan": "Pustaka jenis bisnis untuk pencarian Google Maps. Kunci: k=kata kunci yang dikirim ke GMaps, alasan=kenapa sektor ini layak dikejar untuk jasa web development & digital marketing. Dipilih agar sejalan dengan KATEGORI_TINGGI di scrapers/scoring.py — keyword yang direkomendasikan di sini adalah yang skornya juga dihargai mesin penilai. Hindari kata kunci yang terlalu umum seperti 'PT' atau 'toko': hasilnya kantor/pabrik yang jarang membeli jasa website, dan relevansi pencarian Google jadi kacau.",
+  "sektor": [
+    {
+      "nama": "Kesehatan & Estetika",
+      "alasan": "Nilai transaksi per pelanggan tinggi dan persaingan iklan sangat ketat — mereka sudah terbiasa membayar untuk mendatangkan pasien.",
+      "keywords": [
+        {"k": "Klinik Kecantikan", "alasan": "belanja iklan rutin, sangat bergantung penampilan online"},
+        {"k": "Klinik Gigi", "alasan": "nilai perawatan jutaan rupiah, banyak yang belum punya website"},
+        {"k": "Dokter Gigi", "alasan": "praktik pribadi, jarang punya aset digital"},
+        {"k": "Klinik Kulit", "alasan": "pasar kompetitif, butuh pembeda online"},
+        {"k": "Skin Care Clinic", "alasan": "target pasar melek digital"},
+        {"k": "Klinik Hewan", "alasan": "pelanggan loyal, jarang tergarap agensi"},
+        {"k": "Dokter Hewan", "alasan": "praktik kecil tanpa tim marketing"},
+        {"k": "Laboratorium Klinik", "alasan": "butuh sistem booking online"},
+        {"k": "Klinik Fisioterapi", "alasan": "layanan berulang, cocok untuk Ads"},
+        {"k": "Optik", "alasan": "retail dengan margin baik, banyak cabang"},
+        {"k": "Apotek", "alasan": "jaringan cabang, kandidat toko online"},
+        {"k": "Klinik Kesuburan", "alasan": "nilai transaksi sangat tinggi"},
+        {"k": "Rumah Sakit Ibu dan Anak", "alasan": "anggaran marketing besar"},
+        {"k": "Klinik Akupuntur", "alasan": "hampir tidak pernah tergarap"}
+      ]
+    },
+    {
+      "nama": "Properti & Konstruksi",
+      "alasan": "Satu closing bernilai puluhan hingga ratusan juta, jadi biaya website atau iklan langsung terasa murah bagi mereka.",
+      "keywords": [
+        {"k": "Agen Properti", "alasan": "komisi besar per transaksi, butuh listing online"},
+        {"k": "Kontraktor Bangunan", "alasan": "proyek bernilai ratusan juta"},
+        {"k": "Jasa Renovasi Rumah", "alasan": "sangat bergantung portofolio visual"},
+        {"k": "Arsitek", "alasan": "profesi yang dinilai dari portofolio"},
+        {"k": "Desain Interior", "alasan": "penjualan lewat visual, wajib punya galeri online"},
+        {"k": "Developer Perumahan", "alasan": "anggaran marketing paling besar di sektor ini"},
+        {"k": "Jasa Bangun Rumah", "alasan": "banyak pemain kecil tanpa website"},
+        {"k": "Kontraktor Interior", "alasan": "proyek berulang dari korporat"},
+        {"k": "Jasa Arsitektur", "alasan": "klien mencari lewat Google"},
+        {"k": "Toko Material Bangunan", "alasan": "kandidat toko online"},
+        {"k": "Jasa Pengeboran Sumur", "alasan": "nyaris tanpa persaingan digital"},
+        {"k": "Kontraktor Kolam Renang", "alasan": "nilai proyek tinggi, pasar sempit"}
+      ]
+    },
+    {
+      "nama": "Otomotif",
+      "alasan": "Padat di seluruh Indonesia, nilai servis menengah, dan sangat sedikit yang punya aset digital rapi.",
+      "keywords": [
+        {"k": "Bengkel Mobil", "alasan": "jumlahnya sangat banyak, mayoritas tanpa website"},
+        {"k": "Bengkel Motor", "alasan": "volume besar di tiap kecamatan"},
+        {"k": "Salon Mobil", "alasan": "layanan premium, pelanggan kelas menengah atas"},
+        {"k": "Cuci Mobil", "alasan": "cocok untuk sistem membership online"},
+        {"k": "Rental Mobil", "alasan": "butuh booking online, transaksi harian"},
+        {"k": "Showroom Mobil Bekas", "alasan": "nilai transaksi puluhan juta"},
+        {"k": "Bengkel AC Mobil", "alasan": "spesialis, pencarian Google tinggi"},
+        {"k": "Toko Spare Part Mobil", "alasan": "kandidat toko online"},
+        {"k": "Bengkel Cat Mobil", "alasan": "penjualan lewat foto hasil kerja"},
+        {"k": "Toko Ban Mobil", "alasan": "retail berulang"},
+        {"k": "Bengkel Variasi Mobil", "alasan": "pasar hobi, aktif di sosmed"},
+        {"k": "Jasa Derek Mobil", "alasan": "pencarian darurat lewat Google Maps"}
+      ]
+    },
+    {
+      "nama": "Pendidikan & Kursus",
+      "alasan": "Keputusan pendaftaran hampir selalu diawali pencarian online, dan biaya per murid berulang tiap bulan.",
+      "keywords": [
+        {"k": "Bimbingan Belajar", "alasan": "musiman tapi anggaran iklannya jelas"},
+        {"k": "Kursus Bahasa Inggris", "alasan": "persaingan ketat, butuh pembeda"},
+        {"k": "Sekolah SMK", "alasan": "penerimaan siswa baru butuh kampanye tahunan"},
+        {"k": "TK dan PAUD", "alasan": "orang tua mencari lewat Google Maps"},
+        {"k": "Kursus Komputer", "alasan": "target pasar melek digital"},
+        {"k": "Kursus Musik", "alasan": "biaya bulanan berulang"},
+        {"k": "Kursus Menyetir", "alasan": "hampir semuanya belum punya website"},
+        {"k": "Sekolah Islam Terpadu", "alasan": "anggaran PPDB besar"},
+        {"k": "Kursus Bahasa Mandarin", "alasan": "pasar spesifik dengan daya beli tinggi"},
+        {"k": "Tempat Les Privat", "alasan": "banyak pemain kecil tanpa aset digital"},
+        {"k": "Kursus Jahit", "alasan": "nyaris tanpa persaingan digital"},
+        {"k": "Pesantren", "alasan": "butuh sistem pendaftaran online"}
+      ]
+    },
+    {
+      "nama": "Pernikahan & Event",
+      "alasan": "Dijual lewat visual dan hampir seluruh calon klien menyeleksi vendor lewat internet lebih dulu.",
+      "keywords": [
+        {"k": "Wedding Organizer", "alasan": "nilai proyek puluhan juta per acara"},
+        {"k": "Wedding Photographer", "alasan": "wajib punya galeri online"},
+        {"k": "Catering Pernikahan", "alasan": "order bernilai besar"},
+        {"k": "Dekorasi Pernikahan", "alasan": "penjualan murni lewat foto"},
+        {"k": "Gedung Pernikahan", "alasan": "aset besar, butuh jadwal online"},
+        {"k": "Event Organizer", "alasan": "klien korporat, portofolio menentukan"},
+        {"k": "Sewa Tenda Pesta", "alasan": "pemain lokal tanpa website"},
+        {"k": "Rias Pengantin", "alasan": "penjualan lewat Instagram, belum ada website"},
+        {"k": "Sewa Mobil Pengantin", "alasan": "pasar khusus dengan margin baik"},
+        {"k": "Percetakan Undangan", "alasan": "kandidat toko online"}
+      ]
+    },
+    {
+      "nama": "Jasa Profesional",
+      "alasan": "Klien mencari berdasarkan kredibilitas, dan website adalah bukti kredibilitas paling murah yang bisa mereka beli.",
+      "keywords": [
+        {"k": "Notaris", "alasan": "profesi mapan, hampir tidak ada yang punya website"},
+        {"k": "Konsultan Pajak", "alasan": "klien korporat berulang tiap tahun"},
+        {"k": "Kantor Akuntan", "alasan": "kontrak tahunan bernilai besar"},
+        {"k": "Kantor Pengacara", "alasan": "biaya jasa tinggi, butuh kredibilitas online"},
+        {"k": "Jasa Ekspedisi", "alasan": "butuh sistem cek resi"},
+        {"k": "Jasa Cargo", "alasan": "klien bisnis, transaksi berulang"},
+        {"k": "Konsultan Manajemen", "alasan": "menjual keahlian, wajib punya profil online"},
+        {"k": "Jasa Pembuatan PT", "alasan": "klien datang murni dari pencarian Google"},
+        {"k": "Penerjemah Tersumpah", "alasan": "pasar sempit tapi mencari lewat internet"},
+        {"k": "Jasa Kebersihan Kantor", "alasan": "kontrak bulanan korporat"},
+        {"k": "Jasa Keamanan", "alasan": "kontrak jangka panjang"},
+        {"k": "Konsultan HRD", "alasan": "klien perusahaan menengah"}
+      ]
+    },
+    {
+      "nama": "F&B Menengah ke Atas",
+      "alasan": "Sangat bergantung pada ulasan dan foto; yang sudah punya beberapa cabang biasanya siap berinvestasi digital.",
+      "keywords": [
+        {"k": "Restoran Keluarga", "alasan": "punya anggaran, butuh menu online"},
+        {"k": "Coffee Shop", "alasan": "pemilik muda, melek digital"},
+        {"k": "Katering Harian", "alasan": "order berulang, butuh sistem pemesanan"},
+        {"k": "Katering Kantor", "alasan": "kontrak korporat bulanan"},
+        {"k": "Cafe", "alasan": "sangat bergantung ulasan dan foto"},
+        {"k": "Restoran Seafood", "alasan": "nilai transaksi per meja tinggi"},
+        {"k": "Bakery", "alasan": "kandidat toko online dan pre-order"},
+        {"k": "Toko Kue Ulang Tahun", "alasan": "pemesanan online sangat cocok"},
+        {"k": "Rumah Makan Padang", "alasan": "jaringan cabang, jarang tergarap"},
+        {"k": "Restoran Jepang", "alasan": "segmen menengah atas"}
+      ]
+    },
+    {
+      "nama": "Hospitality & Wisata",
+      "alasan": "Pendapatan langsung bergantung pada visibilitas online dan sistem pemesanan.",
+      "keywords": [
+        {"k": "Hotel", "alasan": "butuh booking langsung agar lepas dari komisi OTA"},
+        {"k": "Villa", "alasan": "nilai sewa tinggi, sangat bergantung foto"},
+        {"k": "Guest House", "alasan": "pemain kecil tanpa sistem booking"},
+        {"k": "Homestay", "alasan": "pemilik perorangan, belum punya aset digital"},
+        {"k": "Tempat Wisata", "alasan": "butuh tiket online"},
+        {"k": "Agen Travel", "alasan": "penjualan paket bernilai jutaan"},
+        {"k": "Travel Umroh", "alasan": "nilai paket sangat tinggi, kredibilitas menentukan"},
+        {"k": "Rental Motor Wisata", "alasan": "pasar turis, mencari lewat Google"},
+        {"k": "Wisata Outbound", "alasan": "klien korporat dan sekolah"}
+      ]
+    },
+    {
+      "nama": "Fitness & Lifestyle",
+      "alasan": "Model keanggotaan berulang, dan pemiliknya biasanya sudah aktif beriklan di media sosial.",
+      "keywords": [
+        {"k": "Gym", "alasan": "membership bulanan, cocok untuk Ads"},
+        {"k": "Studio Yoga", "alasan": "kelas terjadwal, butuh booking online"},
+        {"k": "Salon Kecantikan", "alasan": "jumlahnya sangat banyak, transaksi berulang"},
+        {"k": "Barbershop", "alasan": "pemilik muda, cepat mengambil keputusan"},
+        {"k": "Spa", "alasan": "layanan premium"},
+        {"k": "Studio Pilates", "alasan": "segmen premium, pasar kota besar"},
+        {"k": "Tempat Fitness", "alasan": "variasi kata kunci untuk gym"},
+        {"k": "Klinik Slimming", "alasan": "belanja iklan agresif"},
+        {"k": "Studio Tari", "alasan": "kelas berulang, jarang tergarap"}
+      ]
+    },
+    {
+      "nama": "Retail Spesialis & Grosir",
+      "alasan": "Punya stok nyata yang bisa dijual online — kandidat terkuat untuk toko online, bukan sekadar website profil.",
+      "keywords": [
+        {"k": "Toko Furniture", "alasan": "nilai barang tinggi, sangat cocok toko online"},
+        {"k": "Toko Komputer", "alasan": "pelanggan mencari spesifikasi online"},
+        {"k": "Toko Olahraga", "alasan": "katalog besar"},
+        {"k": "Toko Perlengkapan Bayi", "alasan": "pembelian berulang"},
+        {"k": "Distributor Makanan", "alasan": "klien bisnis, order besar"},
+        {"k": "Grosir Sembako", "alasan": "butuh sistem order untuk reseller"},
+        {"k": "Toko Elektronik", "alasan": "kandidat toko online"},
+        {"k": "Toko Alat Musik", "alasan": "pasar hobi dengan daya beli baik"},
+        {"k": "Toko Bunga", "alasan": "pesanan online dan pengiriman"},
+        {"k": "Percetakan", "alasan": "klien korporat berulang"},
+        {"k": "Konveksi", "alasan": "order seragam bernilai besar"},
+        {"k": "Toko Bangunan", "alasan": "volume transaksi tinggi"}
+      ]
+    }
+  ]
+}
