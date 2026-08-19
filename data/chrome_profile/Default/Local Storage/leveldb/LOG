@@ -1,0 +1,7 @@
+2026/08/14-10:04:08.082 4ed0 Creating DB C:\Users\user\Desktop\botscraping\data\chrome_profile\Default\Local Storage\leveldb since it was missing.
+2026/08/14-10:04:08.136 4ed0 Reusing MANIFEST C:\Users\user\Desktop\botscraping\data\chrome_profile\Default\Local Storage\leveldb/MANIFEST-000001
+2026/08/14-10:08:08.726 4c14 Level-0 table #5: started
+2026/08/14-10:08:08.738 4c14 Level-0 table #5: 20943 bytes OK
+2026/08/14-10:08:08.741 4c14 Delete type=0 #3
+2026/08/14-10:11:01.955 5e04 Level-0 table #7: started
+2026/08/14-10:11:01.974 5e04 Level-0 table #7: 28284 bytes OK

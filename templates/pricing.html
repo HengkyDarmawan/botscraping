@@ -126,6 +126,13 @@
                 <input type="text" id="newStoreUrl" class="form-control form-control-sm"
                        placeholder="https://www.tokopedia.com/namatoko  atau  namatoko">
               </div>
+              <div class="form-check form-switch mb-2">
+                <input class="form-check-input" type="checkbox" id="newStoreOwn">
+                <label class="form-check-label small" for="newStoreOwn">
+                  Ini <strong>toko saya sendiri</strong>
+                  <i class="bi bi-info-circle text-muted" title="Harga toko sendiri dikeluarkan dari statistik pasar, supaya tidak membandingkan harga kita dengan harga kita sendiri."></i>
+                </label>
+              </div>
               <button class="btn btn-sm btn-success w-100" type="button" onclick="addStore()">
                 <i class="bi bi-save me-1"></i>Simpan Toko</button>
               <div id="addStoreStatus" class="mt-1 small"></div>
@@ -193,9 +200,14 @@
           </div>
         </div>
 
-        <button id="runBtn" class="btn btn-scrape w-100" onclick="runPricing()">
-          <i class="bi bi-play-fill me-2"></i>Bandingkan Harga
-        </button>
+        <div class="d-flex gap-2">
+          <button id="runBtn" class="btn btn-scrape flex-grow-1" onclick="runPricing()">
+            <i class="bi bi-play-fill me-2"></i>Panen Harga
+          </button>
+          <button id="stopBtn" class="btn btn-outline-danger d-none" onclick="stopJob()">
+            <i class="bi bi-stop-fill"></i> Stop
+          </button>
+        </div>
       </div>
     </div>
 
@@ -203,10 +215,10 @@
       <div class="card-body">
         <h6 class="fw-bold"><i class="bi bi-lightbulb me-2 text-warning"></i>Cara Pakai</h6>
         <ol class="small text-muted mb-0">
-          <li><strong>Cari Produk</strong>: masukkan keyword → bandingkan harga lintas marketplace</li>
-          <li><strong>Pilih Toko</strong>: centang 1+ toko dari database → ambil harga semua produknya</li>
-          <li>Tokopedia relatif lolos; <strong>Shopee perlu proxy</strong> (DataDome)</li>
-          <li>Rekomendasi harga = 5% di bawah rata-rata pasar</li>
+          <li><strong>Panen dulu</strong> — mode Pilih Toko, centang toko sendiri + kompetitor</li>
+          <li>Lalu pakai panel <strong>Cek Harga</strong> di kanan: ketik nama produk seadanya</li>
+          <li>Modal <strong>tidak wajib</strong> — sistem menyebutkan modal maksimum agar tidak rugi</li>
+          <li>Tokopedia relatif lolos; <strong>Shopee perlu login</strong> (engine Chrome Saya)</li>
         </ol>
       </div>
     </div>
@@ -235,14 +247,68 @@
       </div>
     </div>
 
-    <div class="card mt-3">
+    <!-- ══ CEK HARGA ══ -->
+    <div class="card mt-3 border-primary">
+      <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-calculator me-2"></i>Cek Harga — "saya baiknya pasang berapa?"</span>
+        <span class="badge bg-light text-primary" id="cekStatProduk">0 produk tersimpan</span>
+      </div>
       <div class="card-body">
-        <h6 class="fw-bold"><i class="bi bi-table me-2 text-primary"></i>Kolom Output Excel</h6>
-        <div class="row g-1">
-          {% for col in ['Platform','Nama Produk','Harga','Toko/Seller','Rating','Terjual','Rata² Pasar','Median Pasar','Rekomendasi Harga ✅','Selisih vs Rata²'] %}
-          <div class="col-6"><small class="text-muted">• {{ col }}</small></div>
-          {% endfor %}
+
+        <div class="row g-2 align-items-end mb-2">
+          <div class="col-md-7">
+            <label class="form-label small mb-1">Nama produk <span class="text-muted">(tulis seadanya)</span></label>
+            <input type="text" id="cekKueri" class="form-control" placeholder="mis. intel 7 gen 12"
+                   onkeydown="if(event.key==='Enter') cekHarga()">
+          </div>
+          <div class="col-md-5">
+            <label class="form-label small mb-1">
+              Modal / HPP <span class="badge bg-secondary" style="font-size:.6rem">opsional</span>
+            </label>
+            <input type="text" id="cekModal" class="form-control" placeholder="kosongkan saja">
+          </div>
         </div>
+
+        <div class="d-flex justify-content-between align-items-center mb-2">
+          <a class="small text-decoration-none" data-bs-toggle="collapse" href="#panelBiaya">
+            <i class="bi bi-percent me-1"></i>Biaya marketplace
+          </a>
+          <div class="d-flex gap-2">
+            <button class="btn btn-outline-primary btn-sm" onclick="cariDiToko()"
+                    title="Buka browser, cari produk ini di etalase toko-toko pembanding">
+              <i class="bi bi-cloud-download me-1"></i>Cari di toko
+            </button>
+            <button class="btn btn-primary btn-sm" onclick="cekHarga()">
+              <i class="bi bi-search me-1"></i>Cek Harga
+            </button>
+          </div>
+        </div>
+
+        <div class="collapse mb-2" id="panelBiaya">
+          <div class="p-2 bg-light rounded">
+            <div class="row g-2">
+              <div class="col-4">
+                <label class="form-label small mb-0">Potongan (%)</label>
+                <input type="number" step="0.1" id="cekFee" class="form-control form-control-sm" placeholder="auto">
+              </div>
+              <div class="col-4">
+                <label class="form-label small mb-0">Biaya tetap</label>
+                <input type="number" id="cekTetap" class="form-control form-control-sm" placeholder="auto">
+              </div>
+              <div class="col-4">
+                <label class="form-label small mb-0">Margin min (%)</label>
+                <input type="number" step="0.5" id="cekMargin" class="form-control form-control-sm" placeholder="5">
+              </div>
+            </div>
+            <div class="form-text" style="font-size:.72rem">
+              Admin + program gratis ongkir + biaya layanan. Nilai bawaan per platform
+              bisa diubah; yang dipakai laporan adalah angka di sini.
+            </div>
+          </div>
+        </div>
+
+        <div id="cekVarian" class="mb-2"></div>
+        <div id="cekHasil"></div>
       </div>
     </div>
   </div>
@@ -250,151 +316,5 @@
 {% endblock %}
 
 {% block extra_js %}
-<script>
-document.getElementById('srcCustom').addEventListener('change', function() {
-  document.getElementById('customUrlSection').style.display = this.checked ? 'block' : 'none';
-});
-
-function switchMode(mode) {
-  const showStores = (mode === 'toko' || mode === 'keyword_toko');
-  document.getElementById('sectionProduk').style.display = mode === 'produk' ? 'block' : 'none';
-  document.getElementById('sectionToko').style.display   = showStores ? 'block' : 'none';
-  document.getElementById('sectionKwToko').style.display = mode === 'keyword_toko' ? 'block' : 'none';
-  if (showStores) loadStores();
-}
-
-function toggleProxy(cb) {
-  document.getElementById('proxySection').style.display = cb.checked ? 'block' : 'none';
-}
-
-// ── Engine ──
-function switchEngine(engine) {
-  document.getElementById('chromePanel').style.display = engine === 'my_chrome' ? 'block' : 'none';
-  if (engine === 'my_chrome') checkChromeStatus();
-}
-
-function launchChrome(btn) {
-  btn.disabled = true;
-  btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Membuka...';
-  fetch('/pricing/launch-chrome', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}'})
-    .then(r => r.json()).then(d => {
-      btn.disabled = false;
-      btn.innerHTML = '<i class="bi bi-box-arrow-up-right me-1"></i>Buka Chrome Scraping';
-      if (!d.ok) { alert(d.error || 'Gagal membuka Chrome'); return; }
-      setTimeout(checkChromeStatus, 2500);
-    }).catch(() => { btn.disabled = false; });
-}
-
-function checkChromeStatus() {
-  const el = document.getElementById('chromeStatus');
-  el.className = 'badge bg-secondary'; el.textContent = 'Status: mengecek...';
-  fetch('/pricing/chrome-status').then(r => r.json()).then(d => {
-    if (d.connected) { el.className = 'badge bg-success'; el.textContent = '✓ Terhubung (port ' + d.port + ')'; }
-    else { el.className = 'badge bg-danger'; el.textContent = '✗ Belum terhubung — klik "Buka Chrome Scraping"'; }
-  });
-}
-
-// ── Database toko ──
-let STORES = [];
-function loadStores() {
-  fetch('/pricing/stores').then(r => r.json()).then(data => {
-    STORES = data.stores || [];
-    const el = document.getElementById('storeList');
-    if (!STORES.length) { el.innerHTML = '<div class="text-muted small">Belum ada toko. Tambah di bawah.</div>'; return; }
-    let html = '';
-    ['tokopedia', 'shopee'].forEach(plat => {
-      const group = STORES.filter(s => s.platform === plat);
-      if (!group.length) return;
-      html += `<div class="fw-bold small text-uppercase text-muted mt-1">${plat === 'tokopedia' ? '🟢 Tokopedia' : '🛒 Shopee'}</div>`;
-      group.forEach(s => {
-        html += `<div class="form-check d-flex align-items-center">
-          <input class="form-check-input store-cb" type="checkbox" value="${s.id}" id="cb_${s.id}">
-          <label class="form-check-label flex-grow-1 ms-1" for="cb_${s.id}">${s.nama}
-            <a href="${s.url}" target="_blank" class="text-muted ms-1" style="font-size:.7rem">↗</a></label>
-          <button class="btn btn-sm text-danger py-0 px-1" type="button" title="Hapus" onclick="delStore('${s.id}')">
-            <i class="bi bi-trash"></i></button>
-        </div>`;
-      });
-    });
-    el.innerHTML = html;
-  });
-}
-
-function addStore() {
-  const platform = document.getElementById('newStorePlatform').value;
-  const nama = document.getElementById('newStoreNama').value.trim();
-  const url  = document.getElementById('newStoreUrl').value.trim();
-  const st = document.getElementById('addStoreStatus');
-  if (!url) { st.innerHTML = '<span class="text-danger">URL / username wajib diisi.</span>'; return; }
-  fetch('/pricing/stores', {
-    method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({platform, nama, url})
-  }).then(r => r.json()).then(d => {
-    if (d.ok) {
-      st.innerHTML = '<span class="text-success">✓ Toko ditambahkan.</span>';
-      document.getElementById('newStoreNama').value = '';
-      document.getElementById('newStoreUrl').value = '';
-      loadStores();
-    } else { st.innerHTML = `<span class="text-danger">${d.error || 'Gagal'}</span>`; }
-  });
-}
-
-function delStore(id) {
-  if (!confirm('Hapus toko ini dari database?')) return;
-  fetch('/pricing/stores/delete', {
-    method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({id})
-  }).then(r => r.json()).then(() => loadStores());
-}
-
-// ── Jalankan ──
-function runPricing() {
-  const mode = document.querySelector('input[name="mode"]:checked').value;
-  const engine = document.querySelector('input[name="engine"]:checked').value;
-  const params = {
-    mode: mode,
-    engine: engine,
-    max_results: parseInt(document.getElementById('maxPriceResults').value) || 20,
-    headless: !document.getElementById('showBrowser').checked,
-    use_proxy: document.getElementById('useProxy').checked,
-    proxy_server: document.getElementById('proxyServer').value.trim(),
-    proxy_username: document.getElementById('proxyUser').value.trim(),
-    proxy_password: document.getElementById('proxyPass').value.trim(),
-  };
-
-  if (mode === 'produk') {
-    const kw = document.getElementById('keyword').value.trim();
-    if (!kw) { alert('Masukkan keyword produk terlebih dahulu.'); return; }
-    const sources = [];
-    if (document.getElementById('srcTokopedia').checked) sources.push('tokopedia');
-    if (document.getElementById('srcShopee').checked) sources.push('shopee');
-    if (document.getElementById('srcCustom').checked) sources.push('custom');
-    if (!sources.length) { alert('Pilih minimal satu sumber data.'); return; }
-    Object.assign(params, {
-      keyword: kw,
-      sources: sources,
-      custom_url: document.getElementById('customUrl').value.trim(),
-      custom_sel_harga: document.getElementById('customSelHarga').value.trim(),
-      custom_sel_nama: document.getElementById('customSelNama').value.trim(),
-      use_gemini: document.getElementById('useGemini').checked,
-      gemini_api_key: document.getElementById('geminiApiKey').value.trim(),
-    });
-  } else {
-    // mode 'toko' atau 'keyword_toko'
-    const ids = Array.from(document.querySelectorAll('.store-cb:checked')).map(c => c.value);
-    if (!ids.length) { alert('Pilih minimal satu toko.'); return; }
-    params.store_ids = ids;
-    if (mode === 'keyword_toko') {
-      const kw = document.getElementById('kwToko').value.trim();
-      if (!kw) { alert('Masukkan keyword produk terlebih dahulu.'); return; }
-      params.keyword = kw;
-    }
-  }
-
-  startJob('/pricing/run', params);
-}
-
-// Muat daftar toko sekali di awal (untuk mode toko)
-document.addEventListener('DOMContentLoaded', loadStores);
-</script>
+<script src="{{ url_for('static', filename='js/pricing.js') }}"></script>
 {% endblock %}

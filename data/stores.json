@@ -1,51 +1,56 @@
 [
   {
-    "id": "tkp-logitech",
-    "platform": "tokopedia",
-    "nama": "Logitech Official Store",
-    "url": "https://www.tokopedia.com/logitech",
-    "username": "logitech"
-  },
-  {
-    "id": "tkp-asus",
-    "platform": "tokopedia",
-    "nama": "ASUS Official Store",
-    "url": "https://www.tokopedia.com/asus",
-    "username": "asus"
-  },
-  {
-    "id": "tkp-xiaomi",
-    "platform": "tokopedia",
-    "nama": "Xiaomi Official Store",
-    "url": "https://www.tokopedia.com/xiaomi",
-    "username": "xiaomi"
-  },
-  {
-    "id": "shp-logitech",
+    "id": "sho-jayapc-259",
     "platform": "shopee",
-    "nama": "Logitech Official Shop",
-    "url": "https://shopee.co.id/logitech.id",
-    "username": "logitech.id"
-  },
-  {
-    "id": "shp-xiaomi",
-    "platform": "shopee",
-    "nama": "Xiaomi Official Store",
-    "url": "https://shopee.co.id/xiaomi.official.store",
-    "username": "xiaomi.official.store"
-  },
-  {
-    "id": "sho-jayapc-655",
-    "platform": "shopee",
-    "nama": "jayapc",
-    "url": "https://shopee.co.id/jaya_pc?entryPoint=ShopBySearch&searchKeyword=jayapc",
-    "username": "jaya_pc"
+    "nama": "Jayapc",
+    "url": "https://shopee.co.id/jaya_pc",
+    "username": "jaya_pc",
+    "shop_id": null,
+    "is_own": 1
   },
   {
     "id": "tok-jayapc-444",
     "platform": "tokopedia",
     "nama": "jayapc",
     "url": "https://www.tokopedia.com/jayapc",
-    "username": "jayapc"
+    "username": "jayapc",
+    "shop_id": "243690",
+    "is_own": 1
+  },
+  {
+    "id": "sho-agress-439",
+    "platform": "shopee",
+    "nama": "Agress",
+    "url": "https://shopee.co.id/agreskomputer",
+    "username": "agreskomputer",
+    "shop_id": null,
+    "is_own": 0
+  },
+  {
+    "id": "sho-coc-komputer-743",
+    "platform": "shopee",
+    "nama": "COC Komputer",
+    "url": "https://shopee.co.id/cockomputer",
+    "username": "cockomputer",
+    "shop_id": null,
+    "is_own": 0
+  },
+  {
+    "id": "tok-agress-371",
+    "platform": "tokopedia",
+    "nama": "agress",
+    "url": "https://www.tokopedia.com/agreskomputerofficial",
+    "username": "agreskomputerofficial",
+    "shop_id": "16666231",
+    "is_own": 0
+  },
+  {
+    "id": "tok-expert-komputer-117",
+    "platform": "tokopedia",
+    "nama": "expert komputer",
+    "url": "https://www.tokopedia.com/toko-expert-komputer",
+    "username": "toko-expert-komputer",
+    "shop_id": "1103429",
+    "is_own": 0
   }
 ]

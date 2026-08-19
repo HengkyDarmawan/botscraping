@@ -1,0 +1,31 @@
+label      : jayapc
+waktu      : 20260814_152442
+url final  : https://www.tokopedia.com/jayapc/product
+judul      : Jaya PC - Produk Resmi & Terlengkap | Tokopedia
+panjang html: 1196810 karakter
+jumlah anchor        : 167
+anchor memuat harga  : 80  <-- kunci
+jumlah <img>         : 166
+panjang teks body    : 11384
+
+hasil tiap selector warisan:
+  [card   ]    0  [data-testid="master-product-card"]
+  [card   ]    0  [data-testid="divProductWrapper"]
+  [card   ]    0  div[class*="prd_container-card"]
+  [card   ]    1  a[href*="/product"][data-testid]
+  [card   ]    0  div.css-5wh65g
+  [nama   ]    0  [data-testid="spnSRPProdName"]
+  [nama   ]    0  [class*="prd_link-product-name"]
+  [nama   ]    0  span.css-20kt3o
+  [harga  ]    0  [data-testid="spnSRPProdPrice"]
+  [harga  ]    0  [data-testid="linkProductPrice"]
+  [harga  ]    0  [class*="prd_link-product-price"]
+  [harga  ]    0  span.css-o5uqvq
+  [toko   ]    0  [data-testid="spnSRPProdTabShopName"]
+  [toko   ]    0  [class*="prd_link-product-shop-name"]
+  [toko   ]    0  span.css-1rn0irl
+  [rating ]    0  [data-testid="spnSRPProdRating"]
+  [rating ]    0  [class*="prd_rating-average-text"]
+  [rating ]    0  span.css-t70v7i
+  [terjual]    0  [data-testid="lblItemSoldCountReview"]
+  [terjual]    0  [class*="prd_label-integrity"]

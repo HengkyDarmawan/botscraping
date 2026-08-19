@@ -31,6 +31,42 @@ jobs: dict = {}
 # tumbuh tanpa batas selama server hidup berhari-hari.
 UMUR_JOB_SELESAI = 3600
 
+# ─── Penjaga kode basi ────────────────────────────────────────────────────────
+#
+# app.run(debug=False) tidak pernah memuat ulang modul. Pada 14 Agustus itu
+# menghabiskan satu sesi penuh: server hidup sejak 11:23 terus melayani versi
+# lama sementara perbaikan sudah ada di disk sejak 11:43, dan tidak ada satu pun
+# tanda di UI. Reloader otomatis SENGAJA tidak dipakai — ia akan membunuh job
+# scraping yang sedang berjalan di tengah jalan. Cukup beri tahu user.
+WAKTU_START = time.time()
+
+_SUMBER_DIPANTAU = (
+    "app.py", "db.py", "config.py",
+    "scrapers/pricing.py", "scrapers/mp_api.py", "scrapers/mp_dom.py",
+    "scrapers/mp_common.py", "scrapers/mp_session.py", "scrapers/mp_endpoints.py",
+    "scrapers/mp_lexicon.py", "scrapers/mp_match.py", "scrapers/mp_harga.py",
+    "scrapers/mp_cari.py", "scrapers/gmaps.py", "scrapers/scoring.py",
+)
+
+
+def kode_basi():
+    """Berkas sumber yang berubah setelah proses ini dimulai."""
+    basi = []
+    for rel in _SUMBER_DIPANTAU:
+        try:
+            p = Path(rel)
+            if p.exists() and p.stat().st_mtime > WAKTU_START:
+                basi.append(rel)
+        except OSError:
+            continue
+    return basi
+
+
+@app.context_processor
+def _inject_kode_basi():
+    return {"kode_basi": kode_basi()}
+
+
 db.init_db()
 
 
@@ -312,10 +348,24 @@ def pricing_stores_add():
             platform=data.get("platform", ""),
             nama=data.get("nama", ""),
             url=data.get("url", ""),
+            is_own=data.get("is_own", False),
         )
         return jsonify({"ok": True, "store": entry})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 400
+
+
+@app.route("/pricing/stores/own", methods=["POST"])
+def pricing_stores_own():
+    """Tandai toko sebagai milik sendiri / kompetitor.
+
+    Penandaan ini menentukan baris mana dikeluarkan dari statistik pasar, jadi
+    user harus bisa membetulkannya tanpa menghapus lalu menambah toko lagi.
+    """
+    from scrapers.pricing import set_store_own
+    data = request.json or {}
+    ok = set_store_own(data.get("id", ""), data.get("is_own", False))
+    return jsonify({"ok": ok})
 
 
 @app.route("/pricing/stores/delete", methods=["POST"])
@@ -324,6 +374,118 @@ def pricing_stores_delete():
     store_id = (request.json or {}).get("id", "")
     ok = delete_store(store_id)
     return jsonify({"ok": ok})
+
+
+# ─── Cek Harga ────────────────────────────────────────────────────────────────
+
+@app.route("/pricing/cek", methods=["POST"])
+def pricing_cek():
+    """Jawab 'harga saya baiknya pasang berapa' dari data yang sudah dipanen.
+
+    Tidak membuka browser: user akan mengubah modal & persentase biaya berkali-
+    kali, dan menunggu Chrome tiap kali akan membuat fitur ini tidak terpakai.
+    """
+    from scrapers.pricing import cek_harga
+    d = request.json or {}
+
+    def angka(nama):
+        nilai = d.get(nama)
+        if nilai in (None, "", "null"):
+            return None
+        try:
+            return float(str(nilai).replace(".", "").replace(",", "."))
+        except (TypeError, ValueError):
+            return None
+
+    try:
+        hasil = cek_harga(
+            kueri=d.get("kueri", ""),
+            store_ids=d.get("store_ids") or None,
+            modal=angka("modal"),
+            kunci=d.get("kunci") or None,
+            fee_persen=angka("fee_persen"),
+            biaya_tetap=angka("biaya_tetap"),
+            margin_target=angka("margin_target"),
+        )
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"{type(e).__name__}: {e}"}), 500
+    # Baris produk mentah tidak ikut dikirim — hanya yang dipakai tabel.
+    for kunci in ("rival", "milik"):
+        hasil[kunci] = [
+            {k: b.get(k) for k in ("nama_produk", "harga", "toko", "store_id",
+                                   "terjual", "rating", "url", "platform",
+                                   "is_own", "product_key")}
+            for b in (hasil.get(kunci) or [])
+        ]
+    return jsonify(hasil)
+
+
+@app.route("/pricing/cari-toko", methods=["POST"])
+def pricing_cari_toko():
+    """Panen bertarget: kueri → etalase yang cocok → panen kecil di tiap toko.
+
+    Dijalankan sebagai job supaya progresnya mengalir lewat SSE yang sudah ada,
+    dan tombol Stop ikut hidup.
+    """
+    from scrapers.mp_cari import cari_produk
+    job_id = uuid.uuid4().hex[:8]
+    _jalankan(job_id, cari_produk, request.json or {}, "Cari di toko")
+    return jsonify({"job_id": job_id})
+
+
+@app.route("/pricing/etalase", methods=["GET"])
+def pricing_etalase():
+    """Daftar etalase per toko, untuk dilihat & dipilih manual bila perlu."""
+    return jsonify({"ok": True,
+                    "etalase": db.mp_etalase_list(request.args.get("store_id") or None)})
+
+
+@app.route("/pricing/biaya", methods=["GET", "POST"])
+def pricing_biaya():
+    if request.method == "GET":
+        return jsonify({"ok": True, "biaya": db.mp_biaya()})
+    d = request.json or {}
+    try:
+        db.mp_set_biaya(d.get("platform", ""), d.get("fee_persen", 0),
+                        d.get("biaya_tetap", 0))
+        return jsonify({"ok": True, "biaya": db.mp_biaya()})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+
+
+@app.route("/pricing/modal", methods=["POST"])
+def pricing_modal():
+    d = request.json or {}
+    key = d.get("product_key", "")
+    if not key:
+        return jsonify({"ok": False, "error": "product_key kosong"}), 400
+    db.mp_set_modal(key, d.get("modal", 0), d.get("catatan", ""))
+    return jsonify({"ok": True, "modal": db.mp_get_modal(key)})
+
+
+@app.route("/pricing/gaya", methods=["GET"])
+def pricing_gaya():
+    from scrapers.pricing import gaya_toko
+    return jsonify(gaya_toko(request.args.get("store_id") or None))
+
+
+@app.route("/pricing/data", methods=["GET"])
+def pricing_data():
+    return jsonify({"ok": True, "stats": db.mp_stats()})
+
+
+@app.route("/pricing/hapus-data", methods=["POST"])
+def pricing_hapus_data():
+    """Hapus data marketplace. Hanya tabel mp_*, tidak pernah menyentuh leads."""
+    d = request.json or {}
+    if (d.get("konfirmasi") or "").strip().upper() != "HAPUS":
+        return jsonify({"ok": False,
+                        "error": "Ketik HAPUS untuk konfirmasi."}), 400
+    try:
+        hasil = db.mp_hapus(d.get("scope", ""), d.get("nilai"))
+        return jsonify({"ok": True, "terhapus": hasil, "stats": db.mp_stats()})
+    except ValueError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
 
 
 # ─── Engine "Chrome Saya" (CDP) ───────────────────────────────────────────────

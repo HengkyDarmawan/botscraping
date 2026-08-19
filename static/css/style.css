@@ -164,6 +164,21 @@ body { margin: 0; background: #f0f4f8; font-family: 'Segoe UI', sans-serif; }
 .tier-ARSIP  { background: #f2f2f2; color: #888; }
 .tier-badge { font-weight: 700; border-radius: 10px; padding: 2px 9px; font-size: .72rem; }
 
+/* Posisi harga — bentuk yang sama seperti .tier-* di atas: pil berisi angka,
+   warnanya yang membawa arti. Merah dipakai untuk dua hal yang sama-sama
+   memakan uang: rugi, dan kemahalan sampai tidak laku. */
+.harga-badge {
+  font-weight: 700; border-radius: 10px; padding: 6px 12px; font-size: .95rem;
+  white-space: nowrap;
+}
+.harga-TERMURAH             { background: #d6f5e0; color: #1a6b3c; }
+.harga-MURAH                { background: #e3f6ea; color: #24704a; }
+.harga-WAJAR                { background: #e3f2fd; color: #1565c0; }
+.harga-MAHAL                { background: #ffe4d6; color: #9a4a1a; }
+.harga-MARGIN_TIPIS         { background: #fff2cc; color: #8a6d1a; }
+.harga-RUGI                 { background: #ffd6d6; color: #922; }
+.harga-PASAR_DI_BAWAH_MODAL { background: #ffd6d6; color: #922; }
+
 /* File item */
 .file-item {
   background: #fff; border-radius: 10px; padding: 14px 18px;

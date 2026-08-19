@@ -27,6 +27,14 @@ import pandas as pd
 from playwright.async_api import async_playwright
 from playwright_stealth import Stealth
 
+import db
+from . import mp_api
+from . import mp_common
+from . import mp_harga
+from . import mp_lexicon
+from . import mp_match
+from . import mp_session
+
 OUTPUT_DIR = Path("output")
 DATA_DIR = Path("data")
 STORES_FILE = DATA_DIR / "stores.json"
@@ -54,37 +62,75 @@ async def _random_delay(mn=1.5, mx=3.0):
     await asyncio.sleep(random.uniform(mn, mx))
 
 
-def _parse_price(text) -> int:
-    """Ekstrak angka dari string harga: 'Rp 6.500.000' → 6500000"""
-    if not text:
-        return 0
-    # Ambil potongan 'Rp...' pertama bila ada teks panjang
-    m = re.search(r"Rp\s?[\d\.\,]+", str(text))
-    src = m.group() if m else str(text)
-    digits = re.sub(r"[^\d]", "", src)
-    return int(digits) if digits else 0
-
-
-def _format_price(amount: int) -> str:
-    """Format angka ke rupiah: 6500000 → 'Rp 6.500.000'"""
-    if not amount:
-        return "-"
-    return f"Rp {amount:,.0f}".replace(",", ".")
+# Parsing rupiah tinggal di scrapers/mp_common.py supaya modul marketplace lain
+# memakai aturan yang sama persis. Alias di bawah menjaga pemanggil lama tetap jalan.
+_parse_price = mp_common.parse_harga
+_format_price = mp_common.format_harga
 
 
 # ─── Database toko ────────────────────────────────────────────────────────────
 
-def load_stores() -> list:
-    """Baca daftar toko dari data/stores.json."""
+def _baca_stores_json() -> list:
     try:
         return json.loads(STORES_FILE.read_text(encoding="utf-8"))
     except Exception:
         return []
 
 
+# Toko sendiri milik user. Dipakai sekali saat migrasi supaya `is_own` tidak
+# perlu dicentang manual untuk toko yang sudah lama ada di stores.json.
+_TOKO_SENDIRI = {"jayapc", "jaya_pc"}
+
+_sudah_migrasi = False
+
+
+def _migrasi_stores():
+    """Pindahkan data/stores.json ke tabel mp_stores, sekali saja.
+
+    stores.json dipertahankan sebagai cadangan yang bisa dibaca manusia, tapi
+    sejak sekarang mp_stores yang jadi sumber kebenaran — statistik harga perlu
+    JOIN ke produk, dan itu tidak bisa dilakukan terhadap file JSON.
+    """
+    global _sudah_migrasi
+    if _sudah_migrasi:
+        return
+    _sudah_migrasi = True
+    try:
+        if db.mp_stores(hanya_aktif=False):
+            return
+        for s in _baca_stores_json():
+            if not s.get("id"):
+                continue
+            s = dict(s)
+            s["is_own"] = int((s.get("username") or "").lower() in _TOKO_SENDIRI)
+            db.mp_store_upsert(s)
+    except Exception:
+        # Migrasi gagal tidak boleh menjatuhkan halaman /pricing.
+        pass
+
+
+def load_stores() -> list:
+    """Daftar toko dari mp_stores (migrasi otomatis dari stores.json)."""
+    _migrasi_stores()
+    try:
+        return db.mp_stores(hanya_aktif=False)
+    except Exception:
+        return _baca_stores_json()
+
+
 def save_stores(stores: list):
+    """Tulis daftar toko ke mp_stores + salinan stores.json."""
+    for s in stores:
+        try:
+            db.mp_store_upsert(s)
+        except Exception:
+            pass
     DATA_DIR.mkdir(exist_ok=True)
-    STORES_FILE.write_text(json.dumps(stores, indent=2, ensure_ascii=False), encoding="utf-8")
+    ringkas = [{k: s.get(k) for k in
+                ("id", "platform", "nama", "url", "username", "shop_id", "is_own")}
+               for s in stores]
+    STORES_FILE.write_text(json.dumps(ringkas, indent=2, ensure_ascii=False),
+                           encoding="utf-8")
 
 
 def _slugify(text: str) -> str:
@@ -102,7 +148,7 @@ def _username_from_url(platform: str, url: str) -> str:
     return path.split("/")[0]
 
 
-def add_store(platform: str, nama: str, url: str) -> dict:
+def add_store(platform: str, nama: str, url: str, is_own=False) -> dict:
     """Tambah toko ke database. Mengembalikan entri yang ditambahkan."""
     platform = (platform or "").strip().lower()
     nama = (nama or "").strip()
@@ -119,18 +165,35 @@ def add_store(platform: str, nama: str, url: str) -> dict:
         nama = username
     stores = load_stores()
     new_id = f"{platform[:3]}-{_slugify(nama)}-{random.randint(100, 999)}"
-    entry = {"id": new_id, "platform": platform, "nama": nama, "url": url, "username": username}
+    entry = {"id": new_id, "platform": platform, "nama": nama, "url": url,
+             "username": username, "is_own": int(bool(is_own))}
     stores.append(entry)
     save_stores(stores)
     return entry
 
 
+def set_store_own(store_id: str, is_own) -> bool:
+    """Tandai toko sebagai milik sendiri / kompetitor.
+
+    Penandaan ini yang menentukan baris mana dikeluarkan dari statistik pasar,
+    jadi ia harus bisa diubah kapan saja — bukan hanya saat toko dibuat.
+    """
+    stores = load_stores()
+    if not any(s.get("id") == store_id for s in stores):
+        return False
+    db.mp_store_set_own(store_id, is_own)
+    save_stores(load_stores())
+    return True
+
+
 def delete_store(store_id: str) -> bool:
     stores = load_stores()
-    new = [s for s in stores if s.get("id") != store_id]
-    if len(new) == len(stores):
+    if not any(s.get("id") == store_id for s in stores):
         return False
-    save_stores(new)
+    # Produk & riwayat toko ini ikut dihapus; membiarkannya menggantung berarti
+    # statistik pasar terus memakai harga dari toko yang sudah tidak dipantau.
+    db.mp_hapus("store", store_id)
+    save_stores([s for s in load_stores() if s.get("id") != store_id])
     return True
 
 
@@ -468,62 +531,103 @@ async def _scrape_search(page, platform, keyword, max_results, cb, base_pct, man
 
 # ─── Mode TOKO ────────────────────────────────────────────────────────────────
 
-def _store_product_url(store):
-    platform = store["platform"]
-    url = (store.get("url") or "").rstrip("/")
-    if platform == "tokopedia" and not url.endswith("/product"):
-        url = url + "/product"
-    return url
+# Pembentukan URL toko pindah ke mp_api._url_toko — satu tempat saja, karena
+# lapis API dan lapis DOM harus membuka halaman yang sama persis.
 
 
-def _store_search_url(store, keyword):
-    """URL pencarian keyword DI DALAM toko."""
-    platform = store["platform"]
-    url = (store.get("url") or "").rstrip("/")
-    q = urllib.parse.quote_plus(keyword)
-    if platform == "tokopedia":
-        base = url[:-len("/product")] if url.endswith("/product") else url
-        return f"{base}/product?q={q}"
-    # Shopee: tak ada shop-id → buka halaman toko, andalkan filter keyword sisi-klien
-    return url
+def _ke_baris(rec, store):
+    """Record panen → baris hasil yang dipakai Excel & analisis.
+
+    Kolom lama dipertahankan supaya `_build_comparison` dan `_write_excel` tidak
+    perlu diubah, sambil membawa serta field baru (url, harga coret, sumber)
+    yang selama ini hilang.
+    """
+    return {
+        "platform": (rec.get("platform") or "").title(),
+        "nama_produk": rec.get("nama_produk") or "-",
+        "harga": int(rec.get("harga") or 0),
+        "harga_tampil": _format_price(rec.get("harga")),
+        "toko": store.get("nama") or store.get("username") or "-",
+        "rating": rec.get("rating") or "-",
+        "terjual": rec.get("terjual") or 0,
+        "harga_coret": _format_price(rec.get("harga_coret")),
+        "url": rec.get("url") or "",
+        "sumber": rec.get("sumber") or "",
+        "product_key": rec.get("product_key") or "",
+        # Wajib ikut: statistik pasar mengeluarkan baris toko sendiri, dan tanpa
+        # penanda ini harga kita ikut menaikkan rata-rata pembandingnya sendiri.
+        "is_own": int(bool(store.get("is_own"))),
+        "store_id": store.get("id") or "",
+    }
 
 
-async def _scrape_store(page, store, max_results, cb, base_pct, manual=False):
-    platform = store["platform"]
-    url = _store_product_url(store)
-    cb(base_pct, f"Toko '{store['nama']}' ({platform.title()}): membuka {url[:55]}...", 0)
+def _simpan_shop_id(store):
+    """Tulis balik shop_id hasil resolve ke stores.json.
+
+    `panen_toko` menyetelnya di dict yang ada di memori lalu run selesai dan
+    hasilnya hilang, jadi setiap run mengulang resolve dari nol — satu navigasi
+    ekstra ke halaman toko, dan satu kesempatan ekstra kena captcha.
+    """
+    shop_id = store.get("shop_id")
+    if not shop_id or not store.get("id"):
+        return
+    stores = load_stores()
+    berubah = False
+    for s in stores:
+        if s.get("id") == store["id"] and s.get("shop_id") != shop_id:
+            s["shop_id"] = str(shop_id)
+            berubah = True
+    if berubah:
+        save_stores(stores)
+
+
+async def _scrape_store(page, store, max_results, cb, base_pct,
+                        manual=False, keyword="", berhenti=None, pacer=None,
+                        run_id=None):
+    """Panen satu toko lewat mp_api.panen_toko (api → anchor → selector).
+
+    Menggantikan dua fungsi lama yang langsung menembak `_extract_products`
+    dengan selector halaman pencarian — penyebab tiga run 0-hasil pada 14 Agustus.
+    """
+    nama = store.get("nama") or store.get("username") or "?"
+    label = f"Toko '{nama}'"
+    if keyword:
+        label += f" (keyword '{keyword}')"
+    cb(base_pct, f"{label}: memanen...", 0)
     try:
-        await page.goto(url, wait_until="domcontentloaded", timeout=60_000)
-        await _random_delay(3.0, 5.0)
-        if not await _pass_challenge(page, cb, label=f"Toko {store['nama']}", manual=manual):
-            return []
-        await _human_scroll(page, times=6)
-        res = await _extract_products(page, platform, max_results, store["nama"], cb, base_pct + 2, 8)
-        cb(None, f"Toko '{store['nama']}': {len(res)} produk", 0)
-        return res
+        rows, sumber, sebab = await mp_api.panen_toko(
+            store, page, maks=max_results, keyword=keyword,
+            sel=_SEL.get(store["platform"]), cb=cb, berhenti=berhenti,
+            pacer=pacer)
     except Exception as e:
-        cb(None, f"Toko '{store['nama']}' error: {type(e).__name__}: {e}", 0)
-        return []
+        return [], f"{type(e).__name__}: {e}"
 
+    _simpan_shop_id(store)
 
-async def _scrape_store_search(page, store, keyword, max_results, cb, base_pct, manual=False):
-    """Cari keyword DI DALAM satu toko."""
-    platform = store["platform"]
-    url = _store_search_url(store, keyword)
-    cb(base_pct, f"Toko '{store['nama']}': cari '{keyword}' → {url[:55]}...", 0)
-    try:
-        await page.goto(url, wait_until="domcontentloaded", timeout=60_000)
-        await _random_delay(3.0, 5.0)
-        if not await _pass_challenge(page, cb, label=f"Toko {store['nama']}", manual=manual):
-            return []
-        await _human_scroll(page, times=6)
-        res = await _extract_products(page, platform, max_results, store["nama"], cb,
-                                      base_pct + 2, 8, keyword_filter=keyword)
-        cb(None, f"Toko '{store['nama']}': {len(res)} produk cocok '{keyword}'", 0)
-        return res
-    except Exception as e:
-        cb(None, f"Toko '{store['nama']}' error: {type(e).__name__}: {e}", 0)
-        return []
+    if not rows:
+        cb(None, f"⚠ {label}: 0 produk — {sebab}", 0)
+        db.mp_store_status(store.get("id"), ok=False, error=sebab)
+        return [], sebab or "tidak ada produk"
+
+    # Simpan record MENTAH (17 field), bukan baris Excel yang sudah dipangkas —
+    # `image_url`, `stok`, `lokasi`, dan `jumlah_ulasan` hilang di `_ke_baris`,
+    # dan tanpa itu analisis berikutnya tidak punya bahan.
+    baru = diperbarui = 0
+    for r in rows:
+        try:
+            aksi = db.mp_upsert_product(r, store_id=store.get("id"),
+                                        is_own=store.get("is_own"))
+            baru += (aksi == "insert")
+            diperbarui += (aksi == "update")
+            db.mp_snapshot_price(r.get("product_key"), r.get("harga"),
+                                 r.get("terjual"), r.get("stok"), run_id=run_id)
+        except Exception as e:
+            cb(None, f"⚠ gagal menyimpan '{(r.get('nama_produk') or '')[:40]}': {e}", 0)
+    db.mp_store_status(store.get("id"), ok=True)
+
+    cb(None, f"✓ {label}: {len(rows)} produk (sumber: {sumber}) "
+             f"— {baru} baru, {diperbarui} diperbarui", 0)
+    return [_ke_baris(r, store) for r in rows], ""
 
 
 # ─── Custom URL (Camoufox sendiri) ────────────────────────────────────────────
@@ -612,28 +716,84 @@ async def _scrape_custom_url(url, selector_harga, selector_nama, headless, proxy
 # ─── Analisis & rekomendasi ───────────────────────────────────────────────────
 
 def _build_comparison(all_results: list) -> list:
+    """Statistik pasar PER PRODUK, bukan satu angka untuk seluruh sheet.
+
+    Versi lama merata-ratakan setiap baris hasil scrape apa pun produknya, lalu
+    menyarankan `rata2 × 0.95` yang sama untuk semuanya — harga RAM dan GPU masuk
+    ke satu rata-rata. Sekarang produk dikelompokkan dulu lewat `mp_match`, dan
+    tiap kelompok punya statistiknya sendiri.
+
+    Tiga hal yang dikeluarkan dari statistik pasar:
+      • baris toko sendiri (`is_own`) — kalau tidak, harga kita ikut menaikkan
+        rata-rata yang sedang kita bandingkan dengan diri sendiri
+      • baris tebakan Gemini (`sumber == 'ai'`)
+      • pencilan harga (aksesori, bundling, cicilan)
+    """
     if not all_results:
         return []
-    valid_prices = [r["harga"] for r in all_results if r["harga"] > 0]
-    if not valid_prices:
-        return all_results
 
-    avg = int(sum(valid_prices) / len(valid_prices))
-    median_price = sorted(valid_prices)[len(valid_prices) // 2]
-    rekomendasi = int(avg * 0.95)
+    try:
+        lex = mp_lexicon.bangun(_judul_per_toko(all_results))
+        # Bekali tiap baris dengan token & kode model supaya `kelompokkan` bisa
+        # memisahkan varian — bentuk yang sama seperti keluaran `mp_match.cari`.
+        siap = []
+        for r in all_results:
+            tok = mp_lexicon.normalisasi(r.get("nama_produk") or "")
+            r["_token"] = tok
+            r["_model"] = sorted({t for t in tok if lex.kelas(t) == "model"})
+            r["_skor"] = 1.0
+            r.setdefault("store_id", r.get("toko"))
+            siap.append(r)
+        grup_list = mp_match.kelompokkan(siap, lex)
+    except Exception:
+        grup_list = []
+
+    # Peta baris → hasil analisis kelompoknya. `id()` aman di sini karena
+    # `kelompokkan` mengembalikan objek dict yang sama, bukan salinannya.
+    per_baris = {}
+    for g in grup_list:
+        hasil = mp_harga.analisa(g, modal=None)
+        stat = hasil.get("statistik") or {}
+        if not stat.get("n"):
+            continue
+        seimbang = next((b for b in hasil.get("band", [])
+                         if b["nama"] in ("Seimbang", "Harga Impas Minimum")), None)
+        for b in g["baris"]:
+            per_baris[id(b)] = (g, stat, seimbang)
 
     for r in all_results:
-        r["rata2_pasar"] = _format_price(avg)
-        r["median_pasar"] = _format_price(median_price)
-        r["rekomendasi_harga"] = _format_price(rekomendasi)
-        if r["harga"] > 0:
-            selisih = r["harga"] - avg
-            r["vs_rata2"] = f"+{_format_price(selisih)}" if selisih > 0 else f"-{_format_price(abs(selisih))}"
+        for k in ("_token", "_model", "_skor"):
+            r.pop(k, None)
+        cocok = per_baris.get(id(r))
+        if not cocok:
+            r.setdefault("varian", "-")
+            r.setdefault("median_pasar", "-")
+            r.setdefault("rekomendasi_harga", "-")
+            r.setdefault("vs_median", "-")
+            r.setdefault("n_pembanding", 0)
+            continue
+        g, stat, seimbang = cocok
+        r["varian"] = g["label"]
+        r["n_pembanding"] = stat["n"]
+        r["median_pasar"] = _format_price(stat["median"])
+        r["rekomendasi_harga"] = seimbang["harga_tampil"] if seimbang else "-"
+        if r.get("harga"):
+            selisih = r["harga"] - stat["median"]
+            r["vs_median"] = (f"+{_format_price(selisih)}" if selisih > 0
+                              else f"-{_format_price(abs(selisih))}" if selisih else "0")
         else:
-            r["vs_rata2"] = "-"
+            r["vs_median"] = "-"
 
-    all_results.sort(key=lambda x: x["harga"] if x["harga"] > 0 else 999_999_999)
+    all_results.sort(key=lambda x: (x.get("varian") or "",
+                                    x.get("harga") or 999_999_999))
     return all_results
+
+
+def _judul_per_toko(baris):
+    peta = {}
+    for r in baris:
+        peta.setdefault(r.get("toko") or "?", []).append(r.get("nama_produk") or "")
+    return peta
 
 
 # ─── Gemini AI tambahan (mode produk) ─────────────────────────────────────────
@@ -693,6 +853,10 @@ async def _gemini_pricing(keyword, sources, max_results, api_key, cb):
                 "toko": str(item.get("toko") or "-").strip(),
                 "rating": str(item.get("rating") or "-").strip(),
                 "terjual": str(item.get("terjual") or "-").strip(),
+                # Ditandai supaya statistik pasar bisa mengeluarkannya. Tanpa
+                # penanda ini tebakan model ikut menentukan median dan
+                # rekomendasi harga — dan itu bug, bukan sekadar kelemahan.
+                "sumber": "ai",
             }
             results.append(hasil)
             cb(None, f"✓ Gemini: {hasil['nama_produk'][:40]} | {hasil['harga_tampil']}", len(results))
@@ -711,8 +875,9 @@ def _write_excel(all_results, cb) -> str:
     filename = f"pricing_{timestamp}.xlsx"
     out_path = OUTPUT_DIR / filename
 
-    col_order = ["platform", "nama_produk", "harga_tampil", "toko", "rating",
-                 "terjual", "rata2_pasar", "median_pasar", "rekomendasi_harga", "vs_rata2"]
+    col_order = ["varian", "platform", "nama_produk", "harga_tampil", "harga_coret",
+                 "toko", "rating", "terjual", "n_pembanding", "median_pasar",
+                 "rekomendasi_harga", "vs_median", "sumber", "url"]
     df = pd.DataFrame(all_results)
     cols = [c for c in col_order if c in df.columns]
     df = df[cols] if cols else df
@@ -757,7 +922,24 @@ def _build_proxy(params):
     return proxy
 
 
-async def _async_main(params, cb):
+def _lapor_nol(sebab_per_toko, cb):
+    """Jelaskan kenapa hasilnya nol, dan JANGAN tulis file.
+
+    Sebelum ini, run 0-hasil tetap menghasilkan pricing_*.xlsx 4991 byte tanpa
+    kolom — menumpuk di output/ tanpa memberi tahu apa pun. Yang dibutuhkan user
+    bukan filenya, tapi sebabnya. Pola ini menyalin `_lapor_nol` di gmaps.py:1334.
+    """
+    cb(None, "⚠ 0 produk — tidak ada file dibuat.", 0)
+    for nama, sebab in sebab_per_toko:
+        cb(None, f"   • {nama}: {sebab}", 0)
+    if sebab_per_toko:
+        cb(None, "   → Buka folder output/diag_* untuk melihat page.html & "
+                 "screenshot halaman saat panen gagal.", 0)
+    cb(100, "Selesai tanpa hasil — tidak ada file yang ditulis.", 0)
+    return None
+
+
+async def _async_main(params, cb, should_stop=None):
     mode = params.get("mode", "produk")
     keyword = str(params.get("keyword", "") or "").strip()
     sources = params.get("sources", ["tokopedia", "shopee"])
@@ -779,40 +961,63 @@ async def _async_main(params, cb):
         cb(2, f"🛡 Proxy aktif: {proxy['server']}", 0)
 
     all_results = []
+    sebab_per_toko = []
+
+    run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    try:
+        db.mp_run_start(run_id, mode=mode, kueri=keyword, engine=engine,
+                        store_ids=",".join(store_ids))
+    except Exception:
+        pass
 
     # ── MODE TOKO / KEYWORD+TOKO ──
     if mode in ("toko", "keyword_toko"):
         is_kw = (mode == "keyword_toko")
         if is_kw and not keyword:
             cb(100, "❌ Keyword kosong untuk mode Keyword + Toko.", 0)
-            return _write_excel([], cb)
+            return None
         stores = load_stores()
         selected = [s for s in stores if s.get("id") in store_ids]
         if not selected:
             cb(100, "❌ Tidak ada toko dipilih. Tambah/pilih toko dulu.", 0)
-            return _write_excel([], cb)
+            return None
         cb(5, f"Mode {'KEYWORD+TOKO' if is_kw else 'TOKO'}: {len(selected)} toko dipilih"
               + (f", keyword '{keyword}'" if is_kw else ""), 0)
+
+        # Satu Pacer dipakai bersama seluruh toko dalam run ini: rem-nya menghitung
+        # request kumulatif, jadi memberi tiap toko Pacer sendiri justru menghapus
+        # gunanya. Selama ini web app memanggil panen_toko tanpa pacer sama sekali.
+        pacer = mp_session.Pacer()
 
         async with _browser_session(headless, proxy, cb, engine) as page:
             total = len(selected)
             for idx, store in enumerate(selected):
+                if should_stop and should_stop():
+                    cb(None, "⏹ Dihentikan user — hasil sementara tetap disimpan.", 0)
+                    break
+                rem = pacer.harus_berhenti()
+                if rem:
+                    cb(None, f"⏹ Pacer: {rem}", 0)
+                    sebab_per_toko.append(("(rem pacer)", rem))
+                    break
                 base = 8 + int(idx / total * 80)
-                if is_kw:
-                    res = await _scrape_store_search(page, store, keyword, max_results, cb, base, manual)
-                else:
-                    res = await _scrape_store(page, store, max_results, cb, base, manual)
+                res, sebab = await _scrape_store(
+                    page, store, max_results, cb, base, manual,
+                    keyword=(keyword if is_kw else ""), berhenti=should_stop,
+                    pacer=pacer, run_id=run_id)
                 all_results.extend(res)
+                if sebab:
+                    sebab_per_toko.append((store.get("nama") or store.get("id"), sebab))
                 cb(8 + int((idx + 1) / total * 80),
                    f"[{idx + 1}/{total}] Toko '{store['nama']}' selesai ({len(res)} produk)",
                    len(all_results))
-                await _random_delay(2.0, 4.0)
+                await _random_delay(3.0, 6.0)
 
     # ── MODE PRODUK ──
     else:
         if not keyword:
             cb(100, "❌ Keyword kosong.", 0)
-            return _write_excel([], cb)
+            return None
 
         marketplaces = [s for s in sources if s in ("tokopedia", "shopee")]
         if marketplaces:
@@ -838,12 +1043,119 @@ async def _async_main(params, cb):
         elif use_gemini and not gemini_api_key:
             cb(93, "⚠ Gemini dilewati — API key tidak diisi", len(all_results))
 
+    if not all_results:
+        try:
+            db.mp_run_finish(run_id, total=0)
+        except Exception:
+            pass
+        return _lapor_nol(sebab_per_toko, cb)
+
     cb(96, f"Total {len(all_results)} produk. Menyusun perbandingan harga...", len(all_results))
     all_results = _build_comparison(all_results)
-    return _write_excel(all_results, cb)
+    berkas = _write_excel(all_results, cb)
+    try:
+        db.mp_run_finish(run_id, total=len(all_results), filename=berkas or "")
+    except Exception:
+        pass
+    return berkas
 
 
-def run_price_comparison(params: dict, callback) -> str:
+def run_price_comparison(params: dict, callback, should_stop=None) -> str:
+    """Tiga parameter disengaja: app.py:_terima_should_stop memeriksa signature,
+    dan hanya dengan >=3 parameter tombol Stop di UI ikut hidup."""
     if sys.platform == "win32":
         asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
-    return asyncio.run(_async_main(params, callback))
+    return asyncio.run(_async_main(params, callback, should_stop))
+
+
+# ─── Cek Harga: tanya DB, bukan buka browser ──────────────────────────────────
+
+def cek_harga(kueri, store_ids=None, modal=None, kunci=None,
+              fee_persen=None, biaya_tetap=None, margin_target=None) -> dict:
+    """Jawab "harga saya baiknya pasang berapa?" dari data yang SUDAH dipanen.
+
+    Sengaja tidak menyentuh browser sama sekali. Mengubah modal atau persentase
+    biaya seharusnya tidak pernah memicu scraping ulang — user akan mengutak-atik
+    angka itu berkali-kali, dan menunggu Chrome tiap kali membuat fiturnya tidak
+    terpakai. Panen dijalankan terpisah lewat tombol scraping yang sudah ada.
+    """
+    kueri = str(kueri or "").strip()
+    if not kueri:
+        return {"ok": False, "error": "Ketik dulu nama produknya."}
+
+    produk = db.mp_products_semua(store_ids=store_ids or None)
+    if not produk:
+        return {"ok": False, "error":
+                "Belum ada produk tersimpan. Jalankan scraping toko dulu "
+                "(mode Toko), lalu kembali ke sini."}
+
+    lex = mp_lexicon.bangun_dari_db(store_ids=store_ids or None)
+    grup = mp_match.cari_dan_kelompokkan(kueri, produk, lex)
+    if not grup:
+        return {"ok": False, "error":
+                f"Tidak ada produk yang cocok dengan '{kueri}' di "
+                f"{len(produk)} produk tersimpan.",
+                "n_produk_dicek": len(produk)}
+
+    # Varian yang dipilih user; kalau belum memilih, ambil yang pembandingnya
+    # paling banyak — itu yang statistiknya paling bisa dipercaya.
+    terpilih = next((g for g in grup if g["kunci"] == kunci), grup[0])
+
+    platform = (terpilih["baris"][0].get("platform") or "tokopedia").lower()
+    biaya = db.mp_biaya(platform)
+    fee = biaya["fee_persen"] if fee_persen is None else float(fee_persen)
+    tetap = biaya["biaya_tetap"] if biaya_tetap is None else int(biaya_tetap)
+    margin = (mp_harga.MARGIN_MIN if margin_target is None
+              else float(margin_target) / 100)
+
+    # Modal: dari input, atau dari yang pernah disimpan untuk produk kita.
+    if modal in (None, "", 0):
+        modal = None
+        for b in terpilih["baris"]:
+            if b.get("is_own"):
+                m = db.mp_get_modal(b.get("product_key"))
+                if m and m.get("modal"):
+                    modal = int(m["modal"])
+                    break
+
+    hasil = mp_harga.analisa(terpilih, modal=modal, fee_persen=fee,
+                             biaya_tetap=tetap, margin_target=margin)
+    hasil["ok"] = True
+    hasil["kueri"] = kueri
+    hasil["kunci"] = terpilih["kunci"]
+    hasil["platform"] = platform
+
+    # Status per toko. "Toko ini tidak menjualnya" adalah jawaban yang sah, tapi
+    # hanya kalau dikatakan — kalau tokonya cuma hilang diam-diam dari tabel,
+    # user tidak bisa membedakannya dari panen yang gagal.
+    punya = {b.get("store_id") for b in terpilih["baris"]}
+    hasil["toko_status"] = [
+        {"store_id": s["id"], "nama": s.get("nama") or s.get("username"),
+         "is_own": int(bool(s.get("is_own"))),
+         "punya": s["id"] in punya,
+         "n_produk_tersimpan": sum(
+             1 for p in produk if p.get("store_id") == s["id"]),
+         "last_error": s.get("last_error") or ""}
+        for s in db.mp_stores(hanya_aktif=False)
+        if s.get("platform") == platform
+        and (not store_ids or s["id"] in store_ids)
+    ]
+    hasil["ringkasan"] = mp_harga.ringkas_kalimat(hasil)
+    hasil["varian"] = [
+        {"kunci": g["kunci"], "label": g["label"], "n_toko": g["n_toko"],
+         "n_produk": g["n_produk"], "harga_min": g["harga_min"],
+         "harga_maks": g["harga_maks"], "punya_sendiri": g["punya_sendiri"],
+         "dipilih": g["kunci"] == terpilih["kunci"]}
+        for g in grup
+    ]
+    return hasil
+
+
+def gaya_toko(store_id) -> dict:
+    """Ringkasan cara toko ini menulis judul produknya."""
+    produk = db.mp_products_semua(store_ids=[store_id] if store_id else None)
+    judul = [p.get("nama_produk") or "" for p in produk]
+    terjual = [p.get("terjual") or 0 for p in produk]
+    gaya = mp_lexicon.ringkas_gaya(judul, terjual)
+    return {"ok": True, "store_id": store_id, "gaya": gaya,
+            "kalimat": mp_lexicon.kalimat_gaya(gaya)}

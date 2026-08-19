@@ -55,6 +55,19 @@
     </div>
   </div>
 
+  {% if kode_basi %}
+  <div class="alert alert-warning d-flex align-items-start gap-2 mb-4">
+    <i class="bi bi-exclamation-triangle-fill fs-5"></i>
+    <div>
+      <strong>Server menjalankan kode lama.</strong>
+      {{ kode_basi|length }} berkas berubah setelah server dijalankan
+      (<code>{{ kode_basi|join('</code>, <code>')|safe }}</code>).
+      Hasil scraping akan memakai versi lama sampai server di-restart:
+      hentikan <code>python app.py</code> lalu jalankan lagi.
+    </div>
+  </div>
+  {% endif %}
+
   {% block content %}{% endblock %}
 </div>
 

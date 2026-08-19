@@ -126,7 +126,113 @@ CREATE TABLE IF NOT EXISTS searches (
 );
 
 CREATE INDEX IF NOT EXISTS idx_search_at ON searches(run_at);
+
+-- ─── Marketplace intelligence (namespace mp_) ────────────────────────────────
+-- Terpisah total dari tabel leads di atas. `mp_hapus()` hanya menyentuh tabel
+-- ber-prefix mp_, jadi membersihkan data harga tidak pernah bisa menghapus lead.
+
+CREATE TABLE IF NOT EXISTS mp_stores (
+    id          TEXT PRIMARY KEY,
+    platform    TEXT NOT NULL,
+    nama        TEXT,
+    url         TEXT,
+    username    TEXT,
+    shop_id     TEXT,
+    is_own      INTEGER DEFAULT 0,   -- 0/1, bukan True/False: lihat catatan mp_*
+    aktif       INTEGER DEFAULT 1,
+    created_at  TEXT,
+    last_ok_at  TEXT,
+    last_error  TEXT
+);
+
+CREATE TABLE IF NOT EXISTS mp_products (
+    product_key    TEXT PRIMARY KEY,   -- 'tkp:<shop>:<pid>' / 'shp:<shop>:<itemid>'
+    store_id       TEXT,
+    platform       TEXT,
+    is_own         INTEGER DEFAULT 0,
+    nama_produk    TEXT,
+    url            TEXT,
+    image_url      TEXT,
+    harga          INTEGER DEFAULT 0,
+    harga_coret    INTEGER DEFAULT 0,
+    diskon_persen  INTEGER DEFAULT 0,
+    rating         REAL DEFAULT 0,
+    jumlah_ulasan  INTEGER DEFAULT 0,
+    terjual        INTEGER DEFAULT 0,
+    stok           INTEGER DEFAULT 0,
+    lokasi         TEXT,
+    sumber         TEXT,
+    first_seen_at  TEXT,
+    last_seen_at   TEXT,
+    times_seen     INTEGER DEFAULT 1
+);
+
+CREATE INDEX IF NOT EXISTS idx_mp_prod_store ON mp_products(store_id);
+CREATE INDEX IF NOT EXISTS idx_mp_prod_own   ON mp_products(is_own);
+CREATE INDEX IF NOT EXISTS idx_mp_prod_nama  ON mp_products(nama_produk);
+
+CREATE TABLE IF NOT EXISTS mp_price_history (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    product_key TEXT NOT NULL,
+    run_id      TEXT,
+    harga       INTEGER,
+    terjual     INTEGER,
+    stok        INTEGER,
+    captured_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_mp_hist ON mp_price_history(product_key, captured_at);
+
+-- Modal & biaya adalah angka yang DIKETIK USER, jadi tabelnya sendiri. Kalau
+-- ia jadi kolom di mp_products, satu re-scrape bisa menimpanya diam-diam.
+CREATE TABLE IF NOT EXISTS mp_modal (
+    product_key TEXT PRIMARY KEY,
+    modal       INTEGER,
+    catatan     TEXT,
+    updated_at  TEXT
+);
+
+CREATE TABLE IF NOT EXISTS mp_biaya (
+    platform     TEXT PRIMARY KEY,
+    fee_persen   REAL DEFAULT 0,
+    biaya_tetap  INTEGER DEFAULT 0,
+    updated_at   TEXT
+);
+
+-- Etalase = kategori yang dibuat penjual sendiri ("PROCESSOR INTEL GEN 14",
+-- "VGA NVIDIA GEFORCE"). Judul produk ditulis berbeda-beda tiap toko, tapi
+-- kategorinya jauh lebih seragam — jadi memetakan kueri ke etalase adalah cara
+-- paling murah untuk memanen sedikit tapi tepat sasaran.
+CREATE TABLE IF NOT EXISTS mp_etalase (
+    id                TEXT PRIMARY KEY,   -- '<store_id>:<slug>'
+    store_id          TEXT NOT NULL,
+    slug              TEXT NOT NULL,
+    nama              TEXT,
+    url               TEXT,
+    n_produk          INTEGER DEFAULT 0,
+    terakhir_panen_at TEXT,
+    created_at        TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_mp_etalase_store ON mp_etalase(store_id);
+
+CREATE TABLE IF NOT EXISTS mp_runs (
+    run_id       TEXT PRIMARY KEY,
+    mode         TEXT,
+    kueri        TEXT,
+    engine       TEXT,
+    store_ids    TEXT,
+    sumber_tier  TEXT,
+    total        INTEGER DEFAULT 0,
+    filename     TEXT,
+    started_at   TEXT,
+    finished_at  TEXT
+);
 """
+
+# Kolom mp_products yang tidak boleh ditimpa hasil scrape berikutnya.
+# `is_own` adalah keputusan user, `first_seen_at` adalah sejarah.
+KOLOM_MP_TERLINDUNGI = {"first_seen_at", "is_own", "product_key"}
 
 
 # ─── Koneksi ──────────────────────────────────────────────────────────────────
@@ -643,7 +749,438 @@ def stats():
         }
 
 
+# ─── Marketplace intelligence (mp_*) ──────────────────────────────────────────
+#
+# JEBAKAN BOOLEAN: SQLite menyimpan boolean sebagai 0/1, jadi baris yang dibaca
+# kembali dari DB TIDAK PERNAH lolos `x is True`. Semua kode di bawah menulis
+# dengan `int(bool(v))` dan membaca dengan truthiness biasa. Aturan yang sama
+# sudah menggigit sisi leads sebelumnya — jangan diulang di sini.
+
+BIAYA_BAWAAN = {
+    # Angka awal yang masuk akal untuk penjual non-official di 2026, dan memang
+    # dimaksudkan untuk diedit user lewat UI — biaya tiap seller berbeda
+    # tergantung program yang diikuti (Gratis Ongkir XTRA, Bebas Ongkir, dll).
+    "shopee":    {"fee_persen": 8.0, "biaya_tetap": 5000},
+    "tokopedia": {"fee_persen": 6.5, "biaya_tetap": 5000},
+}
+
+
+def _kolom_mp(tabel):
+    with _lock:
+        cur = get_conn().execute(f"PRAGMA table_info({tabel})")
+        return [r["name"] for r in cur.fetchall()]
+
+
+# ── Toko ──
+
+def mp_store_upsert(store):
+    """Simpan/perbarui satu toko. `is_own` tidak pernah ditimpa oleh scraper."""
+    sid = store.get("id")
+    if not sid:
+        raise ValueError("mp_store_upsert butuh id")
+    kolom_valid = set(_kolom_mp("mp_stores"))
+    data = {k: v for k, v in store.items() if k in kolom_valid}
+    if "is_own" in data:
+        data["is_own"] = int(bool(data["is_own"]))
+    if "aktif" in data:
+        data["aktif"] = int(bool(data["aktif"]))
+
+    with _lock:
+        conn = get_conn()
+        ada = conn.execute("SELECT * FROM mp_stores WHERE id = ?", (sid,)).fetchone()
+        if ada is None:
+            data.setdefault("created_at", _now())
+            data.setdefault("is_own", 0)
+            data.setdefault("aktif", 1)
+            kolom = list(data.keys())
+            conn.execute(
+                f"INSERT INTO mp_stores ({', '.join(kolom)}) "
+                f"VALUES ({', '.join('?' * len(kolom))})",
+                [data[k] for k in kolom],
+            )
+            conn.commit()
+            return "insert"
+        data = {k: v for k, v in data.items()
+                if v is not None or dict(ada).get(k) is None}
+        data.pop("created_at", None)
+        if not data:
+            return "update"
+        kolom = list(data.keys())
+        conn.execute(
+            f"UPDATE mp_stores SET {', '.join(f'{k} = ?' for k in kolom)} WHERE id = ?",
+            [data[k] for k in kolom] + [sid],
+        )
+        conn.commit()
+        return "update"
+
+
+def mp_stores(hanya_aktif=True, is_own=None):
+    sql = "SELECT * FROM mp_stores WHERE 1=1"
+    args = []
+    if hanya_aktif:
+        sql += " AND aktif = 1"
+    if is_own is not None:
+        sql += " AND is_own = ?"
+        args.append(int(bool(is_own)))
+    sql += " ORDER BY is_own DESC, platform, nama"
+    with _lock:
+        return [dict(r) for r in get_conn().execute(sql, args).fetchall()]
+
+
+def mp_store_set_own(store_id, is_own):
+    with _lock:
+        conn = get_conn()
+        conn.execute("UPDATE mp_stores SET is_own = ? WHERE id = ?",
+                     (int(bool(is_own)), store_id))
+        # Produk yang sudah tersimpan ikut ditandai ulang, kalau tidak statistik
+        # pasar masih memakai penandaan lama sampai scrape berikutnya.
+        conn.execute("UPDATE mp_products SET is_own = ? WHERE store_id = ?",
+                     (int(bool(is_own)), store_id))
+        conn.commit()
+
+
+def mp_store_status(store_id, ok=True, error=""):
+    with _lock:
+        conn = get_conn()
+        if ok:
+            conn.execute("UPDATE mp_stores SET last_ok_at = ?, last_error = '' "
+                         "WHERE id = ?", (_now(), store_id))
+        else:
+            conn.execute("UPDATE mp_stores SET last_error = ? WHERE id = ?",
+                         (str(error)[:500], store_id))
+        conn.commit()
+
+
+# ── Produk & riwayat ──
+
+def mp_upsert_product(rec, store_id=None, is_own=None):
+    """Simpan produk hasil panen. Return "insert" | "update".
+
+    Meniru disiplin `upsert_business`: nilai None berarti "gagal dibaca kali ini",
+    bukan "sekarang kosong", jadi tidak pernah menimpa nilai lama yang bagus.
+    """
+    key = rec.get("product_key")
+    if not key:
+        raise ValueError("mp_upsert_product butuh product_key")
+
+    kolom_valid = set(_kolom_mp("mp_products"))
+    data = {k: v for k, v in rec.items() if k in kolom_valid}
+    if store_id:
+        data["store_id"] = store_id
+    if is_own is not None:
+        data["is_own"] = int(bool(is_own))
+    now = _now()
+
+    with _lock:
+        conn = get_conn()
+        baris = conn.execute("SELECT * FROM mp_products WHERE product_key = ?",
+                             (key,)).fetchone()
+        ada = dict(baris) if baris else None
+
+        if ada is None:
+            data["first_seen_at"] = now
+            data["last_seen_at"] = now
+            data["times_seen"] = 1
+            data.setdefault("is_own", 0)
+            kolom = list(data.keys())
+            conn.execute(
+                f"INSERT INTO mp_products ({', '.join(kolom)}) "
+                f"VALUES ({', '.join('?' * len(kolom))})",
+                [data[k] for k in kolom],
+            )
+            conn.commit()
+            return "insert"
+
+        for k in KOLOM_MP_TERLINDUNGI:
+            # `is_own` boleh diubah lewat mp_store_set_own, tapi tidak lewat scrape.
+            if k != "is_own" or is_own is None:
+                data.pop(k, None)
+        data = {k: v for k, v in data.items()
+                if v is not None or ada.get(k) is None}
+        data["last_seen_at"] = now
+        data["times_seen"] = int(ada.get("times_seen") or 0) + 1
+        kolom = list(data.keys())
+        conn.execute(
+            f"UPDATE mp_products SET {', '.join(f'{k} = ?' for k in kolom)} "
+            f"WHERE product_key = ?",
+            [data[k] for k in kolom] + [key],
+        )
+        conn.commit()
+        return "update"
+
+
+def mp_snapshot_price(product_key, harga, terjual=0, stok=0, run_id=None):
+    """Catat harga HANYA bila berubah dari snapshot terakhir.
+
+    Menyimpan tiap run apa adanya akan membuat riwayat penuh baris identik dan
+    grafik trennya jadi datar penuh titik palsu. Return True bila benar mencatat.
+    """
+    if not product_key or not harga:
+        return False
+    with _lock:
+        conn = get_conn()
+        akhir = conn.execute(
+            "SELECT harga, terjual FROM mp_price_history WHERE product_key = ? "
+            "ORDER BY id DESC LIMIT 1", (product_key,)
+        ).fetchone()
+        if akhir and int(akhir["harga"] or 0) == int(harga) \
+                and int(akhir["terjual"] or 0) == int(terjual or 0):
+            return False
+        conn.execute(
+            "INSERT INTO mp_price_history "
+            "(product_key, run_id, harga, terjual, stok, captured_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (product_key, run_id, int(harga), int(terjual or 0),
+             int(stok or 0), _now()),
+        )
+        conn.commit()
+        return True
+
+
+def mp_products_semua(store_ids=None, is_own=None, batas=0):
+    sql = "SELECT * FROM mp_products WHERE 1=1"
+    args = []
+    if store_ids:
+        sql += f" AND store_id IN ({', '.join('?' * len(store_ids))})"
+        args += list(store_ids)
+    if is_own is not None:
+        sql += " AND is_own = ?"
+        args.append(int(bool(is_own)))
+    sql += " ORDER BY nama_produk"
+    if batas:
+        sql += f" LIMIT {int(batas)}"
+    with _lock:
+        return [dict(r) for r in get_conn().execute(sql, args).fetchall()]
+
+
+def mp_riwayat_harga(product_key, batas=60):
+    with _lock:
+        return [dict(r) for r in get_conn().execute(
+            "SELECT * FROM mp_price_history WHERE product_key = ? "
+            "ORDER BY captured_at DESC LIMIT ?", (product_key, int(batas))
+        ).fetchall()]
+
+
+# ── Modal & biaya (data milik user) ──
+
+def mp_set_modal(product_key, modal, catatan=""):
+    with _lock:
+        conn = get_conn()
+        conn.execute(
+            "INSERT INTO mp_modal (product_key, modal, catatan, updated_at) "
+            "VALUES (?, ?, ?, ?) ON CONFLICT(product_key) DO UPDATE SET "
+            "modal = excluded.modal, catatan = excluded.catatan, "
+            "updated_at = excluded.updated_at",
+            (product_key, int(modal or 0), catatan or "", _now()),
+        )
+        conn.commit()
+
+
+def mp_get_modal(product_key):
+    with _lock:
+        r = get_conn().execute("SELECT * FROM mp_modal WHERE product_key = ?",
+                               (product_key,)).fetchone()
+        return dict(r) if r else None
+
+
+def mp_biaya(platform=None):
+    """Biaya per platform, dengan nilai bawaan untuk platform yang belum diatur."""
+    with _lock:
+        rows = {r["platform"]: dict(r) for r in
+                get_conn().execute("SELECT * FROM mp_biaya").fetchall()}
+    hasil = {}
+    for plat, bawaan in BIAYA_BAWAAN.items():
+        hasil[plat] = dict(bawaan, **{k: v for k, v in rows.get(plat, {}).items()
+                                      if k in ("fee_persen", "biaya_tetap")})
+    for plat, r in rows.items():
+        hasil.setdefault(plat, {"fee_persen": r.get("fee_persen") or 0,
+                                "biaya_tetap": r.get("biaya_tetap") or 0})
+    if platform:
+        return hasil.get(platform, {"fee_persen": 0.0, "biaya_tetap": 0})
+    return hasil
+
+
+def mp_set_biaya(platform, fee_persen, biaya_tetap):
+    with _lock:
+        conn = get_conn()
+        conn.execute(
+            "INSERT INTO mp_biaya (platform, fee_persen, biaya_tetap, updated_at) "
+            "VALUES (?, ?, ?, ?) ON CONFLICT(platform) DO UPDATE SET "
+            "fee_persen = excluded.fee_persen, biaya_tetap = excluded.biaya_tetap, "
+            "updated_at = excluded.updated_at",
+            (platform, float(fee_persen or 0), int(biaya_tetap or 0), _now()),
+        )
+        conn.commit()
+
+
+# ── Etalase ──
+
+def mp_etalase_upsert(store_id, slug, nama="", url="", n_produk=None):
+    """Simpan/perbarui satu etalase. `terakhir_panen_at` hanya diubah oleh
+    `mp_etalase_dipanen` — mendaftar etalase bukan berarti sudah memanennya."""
+    if not store_id or not slug:
+        raise ValueError("mp_etalase_upsert butuh store_id dan slug")
+    eid = f"{store_id}:{slug}"
+    with _lock:
+        conn = get_conn()
+        ada = conn.execute("SELECT id FROM mp_etalase WHERE id = ?", (eid,)).fetchone()
+        if ada is None:
+            conn.execute(
+                "INSERT INTO mp_etalase (id, store_id, slug, nama, url, n_produk, "
+                "created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (eid, store_id, slug, nama or slug, url or "",
+                 int(n_produk or 0), _now()))
+        else:
+            data, kolom = {}, []
+            if nama:
+                data["nama"] = nama
+            if url:
+                data["url"] = url
+            if n_produk is not None:
+                data["n_produk"] = int(n_produk)
+            if data:
+                kolom = list(data.keys())
+                conn.execute(
+                    f"UPDATE mp_etalase SET {', '.join(f'{k} = ?' for k in kolom)} "
+                    f"WHERE id = ?", [data[k] for k in kolom] + [eid])
+        conn.commit()
+    return eid
+
+
+def mp_etalase_dipanen(store_id, slug, n_produk=0):
+    with _lock:
+        conn = get_conn()
+        conn.execute("UPDATE mp_etalase SET terakhir_panen_at = ?, n_produk = ? "
+                     "WHERE id = ?", (_now(), int(n_produk or 0),
+                                      f"{store_id}:{slug}"))
+        conn.commit()
+
+
+def mp_etalase_list(store_id=None):
+    sql = "SELECT * FROM mp_etalase"
+    args = []
+    if store_id:
+        sql += " WHERE store_id = ?"
+        args.append(store_id)
+    sql += " ORDER BY nama"
+    with _lock:
+        return [dict(r) for r in get_conn().execute(sql, args).fetchall()]
+
+
+def mp_etalase_umur_jam(store_id, slug):
+    """Berapa jam sejak etalase ini terakhir dipanen. None bila belum pernah."""
+    with _lock:
+        r = get_conn().execute(
+            "SELECT terakhir_panen_at FROM mp_etalase WHERE id = ?",
+            (f"{store_id}:{slug}",)).fetchone()
+    t = _parse_ts(r["terakhir_panen_at"]) if r else None
+    return None if not t else (datetime.now() - t).total_seconds() / 3600
+
+
+# ── Run ──
+
+def mp_run_start(run_id, mode="", kueri="", engine="", store_ids=""):
+    with _lock:
+        conn = get_conn()
+        conn.execute(
+            "INSERT OR REPLACE INTO mp_runs "
+            "(run_id, mode, kueri, engine, store_ids, started_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (run_id, mode, kueri, engine, str(store_ids), _now()),
+        )
+        conn.commit()
+
+
+def mp_run_finish(run_id, total=0, filename="", sumber_tier=""):
+    with _lock:
+        conn = get_conn()
+        conn.execute(
+            "UPDATE mp_runs SET total = ?, filename = ?, sumber_tier = ?, "
+            "finished_at = ? WHERE run_id = ?",
+            (int(total or 0), filename or "", sumber_tier or "", _now(), run_id),
+        )
+        conn.commit()
+
+
+# ── Hapus ──
+
+# Scope dicocokkan ke daftar literal ini, BUKAN dipakai sebagai nama tabel dari
+# input user — itu jalan tol untuk SQL injection sekaligus penghapusan tabel leads.
+_SCOPE_HAPUS = {"run", "store", "produk", "riwayat", "produk_semua", "semua"}
+
+
+def mp_hapus(scope, nilai=None):
+    """Hapus data mp_* sesuai scope. Tidak pernah menyentuh tabel leads.
+
+    Return dict jumlah baris terhapus per tabel.
+    """
+    if scope not in _SCOPE_HAPUS:
+        raise ValueError(f"scope tidak dikenal: {scope}")
+
+    hasil = {}
+    with _lock:
+        conn = get_conn()
+
+        def jalan(nama, sql, args=()):
+            cur = conn.execute(sql, args)
+            hasil[nama] = cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+
+        if scope == "run":
+            jalan("mp_price_history",
+                  "DELETE FROM mp_price_history WHERE run_id = ?", (nilai,))
+            jalan("mp_runs", "DELETE FROM mp_runs WHERE run_id = ?", (nilai,))
+        elif scope == "store":
+            jalan("mp_price_history",
+                  "DELETE FROM mp_price_history WHERE product_key IN "
+                  "(SELECT product_key FROM mp_products WHERE store_id = ?)", (nilai,))
+            jalan("mp_products", "DELETE FROM mp_products WHERE store_id = ?", (nilai,))
+            jalan("mp_etalase", "DELETE FROM mp_etalase WHERE store_id = ?", (nilai,))
+            jalan("mp_stores", "DELETE FROM mp_stores WHERE id = ?", (nilai,))
+        elif scope == "produk":
+            jalan("mp_price_history",
+                  "DELETE FROM mp_price_history WHERE product_key = ?", (nilai,))
+            jalan("mp_products",
+                  "DELETE FROM mp_products WHERE product_key = ?", (nilai,))
+        elif scope == "riwayat":
+            batas = (datetime.now() - timedelta(days=int(nilai or 90))
+                     ).strftime("%Y-%m-%d %H:%M:%S")
+            jalan("mp_price_history",
+                  "DELETE FROM mp_price_history WHERE captured_at < ?", (batas,))
+        elif scope == "produk_semua":
+            jalan("mp_price_history", "DELETE FROM mp_price_history")
+            jalan("mp_products", "DELETE FROM mp_products")
+        elif scope == "semua":
+            # Sengaja TIDAK menghapus mp_modal dan mp_biaya: itu angka yang user
+            # ketik sendiri dan tidak bisa dipanen ulang oleh scraper mana pun.
+            for t in ("mp_price_history", "mp_products", "mp_etalase",
+                      "mp_runs", "mp_stores"):
+                jalan(t, f"DELETE FROM {t}")
+
+        conn.commit()
+    return hasil
+
+
+def mp_stats():
+    with _lock:
+        conn = get_conn()
+
+        def satu(sql, args=()):
+            return conn.execute(sql, args).fetchone()["n"] or 0
+
+        return {
+            "toko": satu("SELECT COUNT(*) AS n FROM mp_stores"),
+            "toko_sendiri": satu("SELECT COUNT(*) AS n FROM mp_stores WHERE is_own = 1"),
+            "produk": satu("SELECT COUNT(*) AS n FROM mp_products"),
+            "produk_sendiri": satu("SELECT COUNT(*) AS n FROM mp_products WHERE is_own = 1"),
+            "riwayat": satu("SELECT COUNT(*) AS n FROM mp_price_history"),
+            "etalase": satu("SELECT COUNT(*) AS n FROM mp_etalase"),
+            "modal_terisi": satu("SELECT COUNT(*) AS n FROM mp_modal WHERE modal > 0"),
+            "run": satu("SELECT COUNT(*) AS n FROM mp_runs"),
+        }
+
+
 if __name__ == "__main__":
     print("Database:", init_db())
     for k, v in stats().items():
         print(f"  {k}: {v}")
+    print("  marketplace:", mp_stats())
