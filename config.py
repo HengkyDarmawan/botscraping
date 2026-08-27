@@ -107,12 +107,37 @@ MAX_RESULTS = 20     # Jumlah lead yang LOLOS filter awal per query (bukan sekad
                      #   dan JENIS BISNIS, bukan angka ini.
 
 # Berapa halaman listing dibuka bersamaan. Ini pengungkit kecepatan terbesar:
-# tiap listing ±10 detik dan hampir seluruhnya cuma menunggu jaringan.
-#   1 = paling aman (perilaku lama, satu per satu)
-#   3 = default, aman untuk pemakaian normal
-#   5-8 = jauh lebih cepat, tapi naikkan hanya kalau proxy Apify aktif —
-#         tanpa rotasi IP, membuka terlalu banyak sekaligus memancing blokir Google.
-LISTING_KONKUREN = 3
+# hampir seluruh waktu satu listing dihabiskan menunggu jaringan.
+#   0 = OTOMATIS (disarankan) — 5 tanpa proxy, 8 kalau proxy Apify menyala.
+#       Tanpa proxy semua permintaan keluar dari satu IP, jadi batasnya lebih
+#       rendah; dengan proxy tiap context punya IP sendiri.
+#   1 = paling aman (satu per satu, perilaku paling lama)
+#   9-12 = hanya kalau proxy menyala dan koneksi benar-benar kencang.
+LISTING_KONKUREN = 0
+
+# ─── KECEPATAN ────────────────────────────────────────────────────────────────
+# Blokir gambar, video, dan font saat membuka halaman. Foto bisnis dan tile peta
+# adalah bagian terbesar byte yang diunduh, dan scraper tidak pernah membacanya.
+# CSS sengaja TIDAK diblokir: ekstraksi memakai teks yang terlihat, dan tanpa CSS
+# elemen tersembunyi ikut terbaca.
+BLOKIR_GAMBAR = True
+
+# MODE CEPAT — ambil lead langsung dari kartu di halaman hasil pencarian, tanpa
+# membuka halaman detail tiap bisnis. Kartu feed sudah memuat nama, kategori,
+# telepon, rating, jumlah ulasan, alamat singkat, dan ada/tidaknya website.
+# Yang TIDAK didapat: JUMLAH ULASAN (Google sudah tidak menampilkannya di kartu
+# sejak Agustus 2026), alamat lengkap, jam operasional, status "sudah diklaim",
+# rentang harga, dan jumlah foto. Karena jumlah ulasan ikut menentukan skor
+# popularitas, lead yang diambil dari kartu mendapat skor pembeli yang lebih
+# konservatif, dan FILTER_REVIEWS tidak bisa diterapkan padanya.
+# Kartu yang datanya belum lengkap tetap dibuka halaman detailnya, jadi mode ini
+# menghemat waktu tanpa mengorbankan lead.
+MODE_CEPAT = False
+
+# Jeda antar listing (detik). Dijalankan di luar batas konkurensi, jadi tidak
+# menahan slot — pacing anti-bot yang sesungguhnya datang dari LISTING_KONKUREN.
+JEDA_LISTING_MIN = 0.3
+JEDA_LISTING_MAX = 1.0
 
 # ─── PRICE SCRAPER (Shopee & Tokopedia) ───────────────────────────────────────
 # Nilai default untuk modul scrapers/pricing.py (bisa di-override dari UI).

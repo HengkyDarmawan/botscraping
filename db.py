@@ -12,6 +12,7 @@ Semua akses dibungkus satu lock karena app.py menjalankan job scraping di
 thread terpisah sementara Flask melayani request di thread lain.
 """
 import hashlib
+import json
 import re
 import sqlite3
 import threading
@@ -79,6 +80,10 @@ CREATE TABLE IF NOT EXISTS businesses (
     skor_pembeli      INTEGER,
     tier              TEXT,
     jasa_utama        TEXT,
+    -- Tim penanggung jawab jasa_utama: "web" / "marketing" / "kreatif".
+    -- Nilainya datang dari data/jasa.json, jadi jalur baru bisa ditambahkan
+    -- tanpa mengubah skema ini.
+    jalur             TEXT,
     jasa_pendukung    TEXT,
     alasan_pitch      TEXT,
 
@@ -126,6 +131,41 @@ CREATE TABLE IF NOT EXISTS searches (
 );
 
 CREATE INDEX IF NOT EXISTS idx_search_at ON searches(run_at);
+
+-- ─── Riwayat run scraping ────────────────────────────────────────────────────
+-- Dipakai untuk dua hal yang dulu tidak mungkin: (1) merakit ulang file Excel
+-- dari database kalau run mati di tengah jalan, dan (2) melanjutkan run yang
+-- terputus dari target yang belum sempat dikerjakan.
+CREATE TABLE IF NOT EXISTS runs (
+    run_id       TEXT PRIMARY KEY,
+    mulai_pada   TEXT,
+    selesai_pada TEXT,
+    -- berjalan | selesai | terputus | dibatalkan
+    status       TEXT DEFAULT 'berjalan',
+    -- params run TANPA kredensial (token proxy & API key sengaja dibuang):
+    -- database lead bukan tempat menyimpan rahasia, dan saat melanjutkan run
+    -- token diisi ulang dari form.
+    params_json  TEXT,
+    target_index INTEGER DEFAULT 0,   -- berapa target yang sudah TUNTAS
+    total_target INTEGER DEFAULT 0,
+    filename     TEXT,
+    baru         INTEGER DEFAULT 0,
+    diupdate     INTEGER DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_runs_status ON runs(status, mulai_pada);
+
+-- Lead mana milik run mana. Diisi SEGERA setiap satu listing selesai dibaca,
+-- bukan di akhir run — inilah yang membuat data tidak hilang saat run gagal.
+CREATE TABLE IF NOT EXISTS run_leads (
+    run_id    TEXT NOT NULL,
+    place_key TEXT NOT NULL,
+    jenis     TEXT DEFAULT 'baru',    -- baru | update
+    dicatat   TEXT,
+    PRIMARY KEY (run_id, place_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_run_leads_run ON run_leads(run_id);
 
 -- ─── Marketplace intelligence (namespace mp_) ────────────────────────────────
 -- Terpisah total dari tabel leads di atas. `mp_hapus()` hanya menyentuh tabel
@@ -253,7 +293,18 @@ def get_conn():
 
 def init_db():
     """Buat file database + tabel bila belum ada. Aman dipanggil berkali-kali."""
-    get_conn()
+    conn = get_conn()
+    # Run yang masih berstatus "berjalan" saat proses baru dimulai berarti proses
+    # yang memegangnya sudah mati (crash / laptop tidur / app di-restart). Ditandai
+    # "terputus" di sini supaya UI bisa menawarkan tombol Lanjutkan — kalau tidak,
+    # run itu menggantung selamanya dan leadnya tidak pernah diklaim siapa pun.
+    with _lock:
+        conn.execute(
+            "UPDATE runs SET status = 'terputus', selesai_pada = ? "
+            "WHERE status = 'berjalan'",
+            (_now(),),
+        )
+        conn.commit()
     return str(DB_PATH.resolve())
 
 
@@ -534,14 +585,15 @@ def touch_checked(place_key):
 
 
 def simpan_intelijen(place_key, skor_pembeli, tier, jasa_utama,
-                     jasa_pendukung, alasan_pitch):
+                     jasa_pendukung, alasan_pitch, jalur=""):
     """Perbarui hasil scoring/rekomendasi tanpa menyentuh kolom lain."""
     with _lock:
         conn = get_conn()
         conn.execute(
             "UPDATE businesses SET skor_pembeli = ?, tier = ?, jasa_utama = ?, "
-            "jasa_pendukung = ?, alasan_pitch = ? WHERE place_key = ?",
-            (skor_pembeli, tier, jasa_utama, jasa_pendukung, alasan_pitch, place_key),
+            "jalur = ?, jasa_pendukung = ?, alasan_pitch = ? WHERE place_key = ?",
+            (skor_pembeli, tier, jasa_utama, jalur, jasa_pendukung, alasan_pitch,
+             place_key),
         )
         conn.commit()
 
@@ -607,13 +659,184 @@ def perubahan_terbaru(place_key=None, batas=100):
 
 # ─── Query untuk halaman CRM ──────────────────────────────────────────────────
 
+# ─── Riwayat run scraping ──────────────────────────────────────────────────
+#
+# Sebelum ini, satu run menumpuk seluruh leadnya di RAM dan baru menulis ke
+# database di baris terakhir. Run 30 wilayah yang mati di wilayah ke-25
+# kehilangan semuanya. Tabel `runs` + `run_leads` membalik itu: tiap lead dicatat
+# begitu dibaca, dan run yang mati tetap bisa dirakit jadi Excel atau dilanjutkan.
+
+# Field params yang TIDAK boleh ikut tersimpan di database.
+_PARAM_RAHASIA = ("apify_proxy_token", "gemini_api_key")
+
+
+def run_start(run_id, params=None, total_target=0):
+    """Catat satu run baru sebagai 'berjalan'. Aman dipanggil ulang (resume)."""
+    bersih = {k: v for k, v in dict(params or {}).items()
+              if k not in _PARAM_RAHASIA and not k.startswith("_")}
+    try:
+        params_json = json.dumps(bersih, ensure_ascii=False)
+    except (TypeError, ValueError):
+        params_json = "{}"
+    now = _now()
+    with _lock:
+        conn = get_conn()
+        ada = conn.execute(
+            "SELECT run_id FROM runs WHERE run_id = ?", (run_id,)
+        ).fetchone()
+        if ada:
+            # Melanjutkan run lama: params & target_index yang tersimpan JANGAN
+            # ditimpa — itulah yang menentukan target mana yang masih tersisa.
+            conn.execute(
+                "UPDATE runs SET status = 'berjalan', selesai_pada = NULL "
+                "WHERE run_id = ?", (run_id,))
+        else:
+            conn.execute(
+                "INSERT INTO runs (run_id, mulai_pada, status, params_json, "
+                "target_index, total_target) VALUES (?, ?, 'berjalan', ?, 0, ?)",
+                (run_id, now, params_json, int(total_target or 0)),
+            )
+        conn.commit()
+    return run_id
+
+
+def run_tandai_target(run_id, index):
+    """Tandai bahwa `index` target pertama sudah TUNTAS dikerjakan."""
+    if not run_id:
+        return
+    with _lock:
+        conn = get_conn()
+        conn.execute(
+            "UPDATE runs SET target_index = ? WHERE run_id = ? AND target_index < ?",
+            (int(index), run_id, int(index)),
+        )
+        conn.commit()
+
+
+def run_catat_lead(run_id, place_key, jenis="baru"):
+    """
+    Klaim satu lead untuk run ini. INSERT OR IGNORE: satu bisnis boleh muncul
+    berkali-kali dalam satu run (mis. dari dua kecamatan bertetangga) tanpa
+    menggandakan barisnya di file hasil.
+    """
+    if not run_id or not place_key:
+        return
+    with _lock:
+        conn = get_conn()
+        conn.execute(
+            "INSERT OR IGNORE INTO run_leads (run_id, place_key, jenis, dicatat) "
+            "VALUES (?, ?, ?, ?)",
+            (run_id, place_key, jenis, _now()),
+        )
+        conn.commit()
+
+
+def run_finish(run_id, status="selesai", filename="", baru=0, diupdate=0):
+    """Tutup run dengan status akhir: selesai / dibatalkan / terputus."""
+    if not run_id:
+        return
+    with _lock:
+        conn = get_conn()
+        conn.execute(
+            "UPDATE runs SET status = ?, selesai_pada = ?, filename = ?, "
+            "baru = ?, diupdate = ? WHERE run_id = ?",
+            (status, _now(), filename or "", int(baru), int(diupdate), run_id),
+        )
+        conn.commit()
+
+
+def run_leads_rows(run_id, jenis="baru"):
+    """
+    Semua lead yang diklaim run ini, langsung dari tabel businesses.
+
+    Inilah sumber file Excel — bukan list di RAM. Konsekuensinya: file bisa
+    dirakit kapan saja, termasuk untuk run yang prosesnya sudah mati, dan isinya
+    selalu gambaran terlengkap (sudah termasuk hasil enrichment yang tersimpan
+    belakangan).
+    """
+    if not run_id:
+        return []
+    sql = ("SELECT b.* FROM businesses b "
+           "JOIN run_leads rl ON rl.place_key = b.place_key "
+           "WHERE rl.run_id = ?")
+    args = [run_id]
+    if jenis:
+        sql += " AND rl.jenis = ?"
+        args.append(jenis)
+    sql += " ORDER BY COALESCE(b.skor_pembeli, 0) DESC"
+    with _lock:
+        cur = get_conn().execute(sql, args)
+        return [dict(r) for r in cur.fetchall()]
+
+
+def run_get(run_id):
+    """Satu baris run sebagai dict (params_json sudah di-parse jadi `params`)."""
+    if not run_id:
+        return None
+    with _lock:
+        row = get_conn().execute(
+            "SELECT * FROM runs WHERE run_id = ?", (run_id,)
+        ).fetchone()
+    if not row:
+        return None
+    d = dict(row)
+    try:
+        d["params"] = json.loads(d.get("params_json") or "{}")
+    except (TypeError, ValueError):
+        d["params"] = {}
+    return d
+
+
+def run_hitung_lead(run_id):
+    """Berapa lead sudah aman tersimpan untuk run ini."""
+    if not run_id:
+        return 0
+    with _lock:
+        row = get_conn().execute(
+            "SELECT COUNT(*) AS n FROM run_leads WHERE run_id = ?", (run_id,)
+        ).fetchone()
+    return int(row["n"]) if row else 0
+
+
+def run_terputus_terakhir():
+    """
+    Run terputus paling baru yang MASIH punya sisa target, atau None.
+
+    Run yang terputus tepat sesudah target terakhir tidak dilaporkan: tidak ada
+    yang bisa dilanjutkan darinya, dan menawarkan tombol Lanjutkan yang tidak
+    mengerjakan apa pun hanya membingungkan.
+    """
+    with _lock:
+        row = get_conn().execute(
+            "SELECT run_id FROM runs WHERE status = 'terputus' "
+            "ORDER BY mulai_pada DESC LIMIT 1"
+        ).fetchone()
+    if not row:
+        return None
+    d = run_get(row["run_id"])
+    if not d:
+        return None
+    sisa = int(d.get("total_target") or 0) - int(d.get("target_index") or 0)
+    if sisa <= 0:
+        return None
+    d["sisa_target"] = sisa
+    d["jumlah_lead"] = run_hitung_lead(d["run_id"])
+    return d
+
+
 def query_leads(tier=None, jasa_utama=None, area=None, status_leads=None,
                 punya_wa=None, skor_min=None, skor_max=None, q=None,
-                urut="skor_pembeli", limit=50, offset=0):
+                run=None, urut="skor_pembeli", limit=50, offset=0):
     """
     Ambil lead dengan filter. Return (rows, total_sebelum_paginasi).
+
+    `run` membatasi hasil ke lead yang diklaim satu run scraping — dipakai tombol
+    "Buat Excel dari run itu" untuk run yang terputus.
     """
     where, args = [], []
+    if run:
+        where.append("place_key IN (SELECT place_key FROM run_leads WHERE run_id = ?)")
+        args.append(run)
     if tier:
         where.append("tier = ?")
         args.append(tier)

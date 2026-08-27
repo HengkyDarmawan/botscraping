@@ -131,10 +131,14 @@ body { margin: 0; background: #f0f4f8; font-family: 'Segoe UI', sans-serif; }
 .wp-shortcut { font-size: .72rem; padding: 2px 9px; border-radius: 12px; }
 
 /* Panel pintasan berkelompok — tertutup sampai diminta, supaya baris pintasan
-   tidak berubah jadi dinding berisi puluhan tombol. */
+   tidak berubah jadi dinding berisi puluhan tombol. Isinya sendiri sudah
+   ratusan tombol (19 sektor jenis bisnis), jadi panelnya dibatasi tinggi dan
+   digulung sendiri — tanpa itu satu klik "Pintasan lainnya" mendorong tombol
+   Jalankan jauh ke bawah layar. */
 .wp-panel {
   display: none; margin-top: 8px; padding: 10px 12px;
   background: #fff; border: 1px solid #e3e7eb; border-radius: 8px;
+  max-height: 360px; overflow-y: auto;
 }
 .wp-panel.show { display: block; }
 .wp-grup + .wp-grup { margin-top: 11px; padding-top: 10px; border-top: 1px solid #f0f2f5; }

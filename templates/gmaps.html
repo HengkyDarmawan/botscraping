@@ -3,6 +3,28 @@
 {% block page_title %}<i class="bi bi-geo-alt-fill text-success me-2"></i>Google Maps Scraper{% endblock %}
 
 {% block content %}
+
+<!-- Run yang mati sebelum semua targetnya selesai. Leadnya sudah aman di
+     database; yang ditawarkan di sini adalah mengerjakan sisa targetnya. -->
+<div id="bannerTerputus" class="alert alert-warning d-none align-items-center mb-4">
+  <i class="bi bi-exclamation-triangle-fill fs-4 me-3"></i>
+  <div class="flex-grow-1">
+    <div class="fw-bold">Run terakhir terputus</div>
+    <div id="terputusInfo" style="font-size:.85rem"></div>
+  </div>
+  <div class="text-nowrap">
+    <button id="btnLanjutkan" class="btn btn-warning btn-sm fw-bold" onclick="lanjutkanRun()">
+      <i class="bi bi-play-fill"></i> Lanjutkan run
+    </button>
+    <a id="btnExcelRun" class="btn btn-outline-secondary btn-sm ms-1" href="#">
+      <i class="bi bi-file-earmark-excel"></i> Buat Excel
+    </a>
+    <button class="btn btn-link btn-sm text-muted ms-1" onclick="tutupBannerTerputus()">
+      Tutup
+    </button>
+  </div>
+</div>
+
 <div class="row g-4">
   <!-- Form -->
   <div class="col-lg-5">
@@ -60,11 +82,12 @@
           </div>
           <div class="col-6">
             <label class="form-label">Listing dibuka sekaligus</label>
-            <input type="number" id="listingKonkuren" class="form-control" value="3" min="1" max="8"
+            <input type="number" id="listingKonkuren" class="form-control" value="0" min="0" max="12"
                    oninput="hitungEstimasi()">
             <div class="form-text" style="font-size:.72rem">
-              Pengungkit kecepatan terbesar. 3 aman; 5-8 jauh lebih cepat tapi
-              naikkan hanya kalau proxy aktif.
+              Pengungkit kecepatan terbesar. <strong>0 = otomatis</strong>
+              (5 tanpa proxy, 8 kalau proxy menyala). Isi angka sendiri hanya
+              kalau perlu memaksa.
             </div>
           </div>
           <div class="col-6">
@@ -117,6 +140,11 @@
               <i class="bi bi-envelope-at me-1"></i>Panen email (blast)
             </button>
             <button type="button" class="btn btn-outline-primary btn-sm"
+                    onclick="pakaiPreset('sosmed')"
+                    title="Bisnis yang aset digitalnya lemah: belum punya sosmed, listing tanpa foto, atau belum pasang tracking iklan. Calon pembeli jasa kelola sosmed, iklan, dan konten.">
+              <i class="bi bi-megaphone me-1"></i>Cari lead jasa sosmed & ads
+            </button>
+            <button type="button" class="btn btn-outline-primary btn-sm"
                     onclick="pakaiPreset('luas')"
                     title="Ambil sebanyak mungkin: apa pun kontaknya, punya website atau tidak.">
               <i class="bi bi-collection me-1"></i>Jaring luas
@@ -147,6 +175,27 @@
           <div class="form-check form-switch mt-1">
             <input class="form-check-input" type="checkbox" id="headlessMode" checked>
             <label class="form-check-label" for="headlessMode">Mode headless (browser tersembunyi)</label>
+          </div>
+          <div class="form-check form-switch mt-1">
+            <input class="form-check-input" type="checkbox" id="modeCepat"
+                   onchange="hitungEstimasi()">
+            <label class="form-check-label fw-bold" for="modeCepat">
+              <i class="bi bi-lightning-charge-fill text-warning"></i> Mode Cepat
+            </label>
+          </div>
+          <div class="form-text ps-4" style="font-size:.72rem">
+            Ambil lead langsung dari kartu hasil pencarian tanpa membuka halaman
+            tiap bisnis — <strong>±3-4x lebih cepat</strong>. Nama, kategori,
+            telepon/WA, rating, alamat singkat, dan website tetap didapat.
+            <br>Yang <strong>tidak</strong> didapat: <em>jumlah ulasan</em>
+            (Google sudah tidak menampilkannya di kartu), alamat lengkap, jam
+            operasional, status "sudah diklaim", rentang harga, jumlah foto.
+            <br><span class="text-warning-emphasis">Karena jumlah ulasan ikut
+            menentukan skor, lead dari kartu mendapat skor pembeli yang lebih
+            konservatif — dan filter "minimal ulasan" tidak bisa diterapkan
+            padanya.</span>
+            Kartu yang datanya kurang lengkap tetap dibuka seperti biasa, jadi
+            tidak ada lead yang hilang.
           </div>
         </div>
         <div id="peringatanFilter" class="alert alert-warning py-2 px-3 mb-3 d-none"
@@ -411,12 +460,17 @@ function kumpulkanTargets() {
 function hitungEstimasi() {
   const n = kumpulkanTargets().length;
   const max = parseInt(document.getElementById('maxResults').value) || 0;
-  const konkuren = Math.max(1, parseInt(document.getElementById('listingKonkuren').value) || 1);
+  // 0 di form berarti otomatis; perkiraannya pakai 5 (nilai tanpa proxy).
+  const diminta = parseInt(document.getElementById('listingKonkuren').value) || 0;
+  const konkuren = diminta > 0 ? diminta
+                 : (document.getElementById('useProxy').checked ? 8 : 5);
   const el = document.getElementById('estimasi');
   if (!n || !max) { el.textContent = ''; return; }
-  // Membuka listing dibagi jumlah yang jalan bersamaan; navigasi feed per
-  // pencarian tetap berurutan.
-  let detik = (n * max * 6) / konkuren + n * 25;
+  // Mode Cepat tidak membuka halaman detail sama sekali, jadi waktu per listing
+  // tinggal ongkos membaca kartu; mode normal ±3,5 detik setelah gambar
+  // diblokir dan context dipakai ulang.
+  const perListing = document.getElementById('modeCepat').checked ? 0.4 : 3.5;
+  let detik = (n * max * perListing) / konkuren + n * 25;
   if (document.getElementById('enrichWebsite').checked) detik *= 1.3;
   const menit = Math.round(detik / 60);
   const jam = (menit / 60).toFixed(1);
@@ -448,6 +502,10 @@ const PRESET = {
   email: {
     modeKontak: 'email', requireNoWebsite: false, enrichWebsite: true,
     info: 'Menyasar bisnis yang PUNYA website, karena dari situlah emailnya dipanen. Mereka tetap prospek kuat untuk jasa redesign & iklan. "Periksa website" wajib menyala.'
+  },
+  sosmed: {
+    modeKontak: 'wa', requireNoWebsite: false, enrichWebsite: true,
+    info: 'Bisnis yang aset digitalnya lemah — belum ada sosmed, listing tanpa foto, atau belum pasang tracking iklan. Calon pembeli jasa kelola sosmed, iklan, dan konten. "Hanya bisnis tanpa website" sengaja dimatikan: bisnis yang websitenya sudah bagus justru prospek terkuat untuk jasa iklan.'
   },
   luas: {
     modeKontak: 'apa_saja', requireNoWebsite: false, enrichWebsite: true,
@@ -557,7 +615,8 @@ function runGmaps() {
     sertakan_bisnis_tutup: document.getElementById('sertakanTutup').checked,
     output_format: document.getElementById('outputFormat').value,
     headless: document.getElementById('headlessMode').checked,
-    listing_konkuren: parseInt(document.getElementById('listingKonkuren').value) || 3,
+    listing_konkuren: parseInt(document.getElementById('listingKonkuren').value) || 0,
+    mode_cepat: document.getElementById('modeCepat').checked,
 
     dedup_enabled: document.getElementById('dedupEnabled').checked,
     dedup_bulan: parseInt(document.getElementById('dedupBulan').value) || 6,
@@ -578,10 +637,53 @@ function runGmaps() {
   startJob('/gmaps/run', params);
 }
 
+// ─── Run yang terputus ──────────────────────────────────────────────────────
+// Leadnya sudah aman di database sejak dibaca; banner ini menawarkan dua hal
+// yang tersisa: mengerjakan sisa targetnya, atau langsung membuat Excelnya.
+let runTerputus = null;
+
+async function cekRunTerputus() {
+  try {
+    const r = await fetch('/gmaps/terputus');
+    const d = await r.json();
+    if (!d.ada) return;
+    runTerputus = d;
+    document.getElementById('terputusInfo').innerHTML =
+      `Berhenti setelah <strong>${d.target_selesai}</strong> dari
+       <strong>${d.total_target}</strong> target
+       (${d.mulai_pada || '-'}). <strong>${d.jumlah_lead}</strong> lead sudah
+       tersimpan aman di database — tidak ada yang hilang.
+       Sisa <strong>${d.sisa_target}</strong> target belum dikerjakan.`;
+    document.getElementById('btnExcelRun').href =
+      '/leads/export?run=' + encodeURIComponent(d.run_id);
+    document.getElementById('bannerTerputus').classList.remove('d-none');
+    document.getElementById('bannerTerputus').classList.add('d-flex');
+  } catch (e) { /* banner ini pelengkap; kegagalannya tidak boleh mengganggu form */ }
+}
+
+function tutupBannerTerputus() {
+  const el = document.getElementById('bannerTerputus');
+  el.classList.add('d-none');
+  el.classList.remove('d-flex');
+}
+
+function lanjutkanRun() {
+  if (!runTerputus) return;
+  // Token tidak pernah disimpan di database, jadi dikirim ulang dari form yang
+  // sedang terbuka. Sisanya (target, filter, mode) datang dari run aslinya.
+  startJob('/gmaps/lanjutkan', {
+    run_id: runTerputus.run_id,
+    apify_proxy_token: document.getElementById('apifyToken').value.trim(),
+    gemini_api_key: document.getElementById('geminiApiKey').value.trim(),
+  });
+  tutupBannerTerputus();
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   document.querySelectorAll('.target-row').forEach(pasangPicker);
   hitungEstimasi();
   cekFilterKetat();
+  cekRunTerputus();
 });
 </script>
 {% endblock %}

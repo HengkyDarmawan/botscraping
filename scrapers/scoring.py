@@ -4,9 +4,25 @@ scrapers/scoring.py — Ubah data mentah jadi keputusan penjualan.
 Menjawab dua pertanyaan untuk setiap bisnis:
 
   1. "Saya sebaiknya menawarkan jasa apa ke bisnis ini?"
-     → rekomendasi_jasa(): aturan berurutan yang membaca kondisi aset digital
-       bisnis dan memilih antara jalur WEB DEVELOPMENT atau DIGITAL MARKETING,
-       lengkap dengan satu kalimat pembuka yang siap dikirim.
+     → rekomendasi_jasa(): mencocokkan kondisi aset digital bisnis dengan
+       katalog jasa di data/jasa.json, lengkap dengan satu kalimat pembuka
+       yang siap dikirim.
+
+     Dua hal sengaja dipisah di sini:
+
+       DIAGNOSA — fakta terukur hasil scraping ("listing tanpa foto", "sosmed
+       kosong", "website mati"). Tinggal di modul ini karena diturunkan dari
+       sinyal scraping.
+
+       KATALOG JASA — jasa mana yang menjawab diagnosa mana, kalimat pitch-nya,
+       dan tim penanggung jawabnya. Tinggal di data/jasa.json supaya menambah
+       jasa baru tidak perlu menyentuh kode.
+
+     Jasa utama dipilih berdasarkan BOBOT, bukan urutan daftar. Ini penting:
+       versi lama memeriksa aturan dari atas ke bawah dan memakai yang pertama
+       cocok, sehingga satu aturan longgar di posisi atas ("belum punya
+       website") selalu mengalahkan aturan spesifik di bawahnya dan jalur
+       marketing praktis tidak pernah bisa menang.
 
   2. "Seberapa besar peluang bisnis ini benar-benar membeli?"
      → skor_pembeli(): skor 0-100 dari tiga hal yang harus ada bersamaan —
@@ -17,11 +33,15 @@ Menjawab dua pertanyaan untuk setiap bisnis:
 Modul ini murni perhitungan — tidak membuka jaringan dan tidak menyentuh
 database, jadi gampang diuji sendiri dan aturannya gampang diubah.
 """
+import json
 import math
 import re
 from datetime import datetime
+from pathlib import Path
 
 from scrapers.enrich import PLATFORM_GRATISAN, url_sosmed, website_efektif
+
+KATALOG_FILE = Path("data") / "jasa.json"
 
 # ─── Kategori bisnis → daya beli ──────────────────────────────────────────────
 # Proksi kasar untuk nilai transaksi rata-rata. Bisnis di daftar "tinggi"
@@ -37,6 +57,18 @@ KATEGORI_TINGGI = (
     "tour", "logistik", "ekspedisi", "asuransi", "leasing", "pabrik",
     "manufaktur", "distributor", "supplier", "bengkel resmi", "salon",
     "spa", "gym", "fitness", "veteriner", "hewan",
+    # Penyewaan tempat/slot & bisnis beriuran rutin. Pendapatannya berulang tiap
+    # bulan, jadi daya belinya setara kategori di atas. Yang dicocokkan adalah
+    # teks KATEGORI Google Maps (sudah di-lowercase di sinyal()), bukan kata
+    # kunci pencarian — mis. "Lapangan futsal", "Kompleks olahraga",
+    # "Agen persewaan mobil" (mengandung "sewa"), "Layanan binatu".
+    "lapangan", "futsal", "badminton", "bulu tangkis", "padel", "tenis",
+    "olahraga", "gelanggang", "sport", "renang", "golf", "biliar", "bilyar",
+    "kebugaran", "sasana", "bela diri", "senam", "coworking",
+    "ruang kerja bersama",
+    "sewa", "kost", "rumah kos", "kos-kosan", "laundry", "binatu",
+    "koperasi", "penukaran mata uang", "money changer", "peternakan",
+    "sablon", "fabrikasi",
 )
 KATEGORI_RENDAH = (
     "warung", "warteg", "kaki lima", "angkringan", "warnet", "konter",
@@ -48,6 +80,17 @@ KATEGORI_RETAIL = (
     "elektronik", "furniture", "mebel", "oleh-oleh", "grosir", "restoran",
     "rumah makan", "kafe", "cafe", "bakery", "kue", "roti", "katering",
     "catering", "frozen", "minuman",
+)
+
+# Kategori yang keputusan belinya sangat ditentukan tampilan: klien memutuskan
+# dari apa yang mereka LIHAT, bukan dari spesifikasi tertulis. Ini pemicu jasa
+# 3D design, fotografi produk, dan materi visual.
+KATEGORI_VISUAL = (
+    "properti", "real estate", "developer", "perumahan", "interior",
+    "arsitek", "kontraktor", "furniture", "mebel", "kitchen set",
+    "wedding", "pernikahan", "event organizer", "catering", "katering",
+    "restoran", "rumah makan", "kafe", "cafe", "bakery", "kue", "roti",
+    "salon", "spa", "butik", "fashion", "fotografi", "percetakan",
 )
 
 TIER_PANAS = "PANAS"
@@ -156,7 +199,7 @@ def sinyal(row):
     url = str(row.get("website") or "").strip()
     platform = str(row.get("web_platform") or "")
 
-    return {
+    hasil = {
         "nama": str(row.get("nama_bisnis") or "bisnis Anda").strip(),
         "kategori": kategori,
         "rating": _angka(row.get("rating")),
@@ -189,6 +232,9 @@ def sinyal(row):
         "email": str(row.get("email") or "").strip(),
         "ig": str(row.get("instagram") or "").strip(),
         "fb": str(row.get("facebook") or "").strip(),
+        # Dulu kolom ini dipanen enrich.py dan disimpan ke database, tapi tidak
+        # pernah dibaca di sini — jadi tidak ada satu pun aturan yang memakainya.
+        "tiktok": str(row.get("tiktok") or "").strip(),
 
         "diklaim": _tri(row.get("sudah_diklaim")),
         "foto": row.get("jumlah_foto"),
@@ -196,194 +242,148 @@ def sinyal(row):
         "status_buka": str(row.get("status_buka") or ""),
     }
 
+    # ── Sosmed: tiga keadaan, bukan dua ──
+    # Akun sosmed hanya bisa dipanen DARI halaman website (enrich._ambil_sosmed).
+    # Jadi kolom instagram/facebook/tiktok yang kosong itu ambigu: bisa berarti
+    # "memang tidak punya", bisa juga "tidak pernah ada kesempatan memeriksa".
+    # Membedakan keduanya wajib — kalau tidak, setiap bisnis tanpa website akan
+    # ditawari jasa pembuatan akun sosmed, termasuk yang Instagramnya sudah
+    # jalan bertahun-tahun.
+    hasil["sosmed_ada"] = bool(hasil["ig"] or hasil["fb"] or hasil["tiktok"]
+                               or hasil["sosmed_saja"])
+    # Halaman benar-benar terbuka dan terbaca ("aktif") — barulah tidak adanya
+    # tautan sosmed di sana jadi bukti. Status "mati"/"error"/"tidak_ada"
+    # berarti tidak ada halaman untuk diperiksa sama sekali.
+    hasil["sosmed_dicek"] = (row.get("web_status") == "aktif"
+                             or hasil["sosmed_saja"])
+    return hasil
+
 
 def _cocok(teks, daftar):
     return any(k in teks for k in daftar)
 
 
-# ─── Aturan rekomendasi jasa ──────────────────────────────────────────────────
-# Diperiksa dari atas ke bawah: yang pertama cocok jadi jasa utama, yang cocok
-# berikutnya jadi jasa pendukung. Tambah/ubah aturan cukup di daftar ini.
+# ─── Diagnosa ───────────────────────────────────────────────────────────────────
+# Fakta terukur tentang satu bisnis, diturunkan dari sinyal hasil scraping.
+# Tiap entri di data/jasa.json menyebut nama-nama diagnosa di sini sebagai
+# syaratnya. Menambah JASA baru cukup mengedit JSON; menambah DIAGNOSA baru
+# (fakta yang belum pernah diukur) barulah perlu menyentuh berkas ini.
 
-RULES = [
-    {
-        # Diperiksa paling awal supaya bisnis yang sudah tutup tidak sempat
-        # diberi label jasa yang menyesatkan.
-        "jasa": "Bisnis Tutup — Lewati",
-        "jalur": "",
-        "cek": lambda s: ("permanen" in s["status_buka"].lower()
-                          or "closed" in s["status_buka"].lower()),
-        "alasan": lambda s: "",
-    },
-    {
-        "jasa": "Website Baru (URGENT)",
-        "jalur": "web",
-        "cek": lambda s: s["ada_url"] and s["web_mati"],
-        "alasan": lambda s: (
-            "Website Anda saat ini tidak bisa diakses — calon pelanggan yang "
-            "mencari nama Anda di Google berakhir di halaman error dan pindah "
-            "ke kompetitor."
-        ),
-    },
-    {
-        "jasa": "Landing Page + Iklan Sosmed",
-        "jalur": "web",
-        "cek": lambda s: s["sosmed_saja"],
-        "alasan": lambda s: (
-            f"Anda sudah aktif berjualan online, tapi tautan {s['nama']} masih "
-            "mengarah ke media sosial/marketplace — belum ada halaman milik "
-            "sendiri yang bisa dioptimasi dan diiklankan."
-        ),
-    },
-    {
-        "jasa": "Upgrade Website Profesional",
-        "jalur": "web",
-        "cek": lambda s: s["punya_web"] and s["gratisan"],
-        "alasan": lambda s: (
-            f"Website Anda masih memakai platform gratisan ({s['platform']}) — "
-            "alamatnya bukan domain milik sendiri dan kurang meyakinkan di mata "
-            "calon klien."
-        ),
-    },
-    {
-        "jasa": "Website Company Profile",
-        "jalur": "web",
-        "cek": lambda s: not s["ada_url"] and s["ulasan"] >= 20 and s["rating"] >= 4.0,
-        "alasan": lambda s: (
-            f"Bisnis Anda jelas ramai — {s['ulasan']} ulasan dengan rating "
-            f"{s['rating']:.1f} — tapi belum punya website. Calon pelanggan yang "
-            "mencari di Google tidak menemukan Anda."
-        ),
-    },
-    {
-        "jasa": "Landing Page + Iklan Instagram",
-        "jalur": "web",
-        "cek": lambda s: not s["ada_url"] and (s["ig"] or s["fb"]),
-        "alasan": lambda s: (
-            "Anda sudah punya audiens di media sosial tapi belum punya website. "
-            "Satu landing page saja sudah cukup untuk mengubah pengikut jadi "
-            "pesanan yang terukur."
-        ),
-    },
-    {
-        "jasa": "Website Company Profile",
-        "jalur": "web",
-        "cek": lambda s: not s["ada_url"],
-        "alasan": lambda s: (
-            "Bisnis Anda belum punya website — pelanggan hanya bisa menilai dari "
-            "listing Google Maps, sementara kompetitor sudah tampil lebih "
-            "profesional."
-        ),
-    },
-    {
-        "jasa": "Redesign + Pasang SSL",
-        "jalur": "web",
-        "cek": lambda s: s["punya_web"] and s["https"] is False,
-        "alasan": lambda s: (
-            "Website Anda belum memakai HTTPS, jadi Chrome menandainya "
-            "'Tidak Aman' dan memperingatkan pengunjung sebelum mereka masuk."
-        ),
-    },
-    {
-        "jasa": "Redesign Mobile-First",
-        "jalur": "web",
-        "cek": lambda s: s["punya_web"] and s["mobile"] is False,
-        "alasan": lambda s: (
-            "Website Anda belum ramah layar HP, padahal hampir semua pelanggan "
-            "membukanya dari ponsel."
-        ),
-    },
-    {
-        "jasa": "Optimasi Kecepatan Website",
-        "jalur": "web",
-        "cek": lambda s: s["punya_web"] and (s["load_ms"] or 0) > 5000,
-        "alasan": lambda s: (
-            f"Website Anda butuh sekitar {(s['load_ms'] or 0) / 1000:.1f} detik "
-            "untuk terbuka. Google menurunkan peringkat situs selambat itu dan "
-            "sebagian pengunjung pergi sebelum halaman muncul."
-        ),
-    },
-    {
-        "jasa": "Redesign (situs terbengkalai)",
-        "jalur": "web",
-        "cek": lambda s: s["punya_web"] and s["basi"],
-        "alasan": lambda s: (
-            f"Website Anda terakhir diperbarui tahun {s['tahun_web']} — "
-            "informasi dan tampilannya sudah tertinggal dari kondisi bisnis "
-            "Anda sekarang."
-        ),
-    },
-    {
-        "jasa": "Toko Online / Sistem Order",
-        "jalur": "web",
-        "cek": lambda s: (s["punya_web"] and s["toko_online"] is False
-                          and _cocok(s["kategori"], KATEGORI_RETAIL)),
-        "alasan": lambda s: (
-            "Pelanggan Anda masih harus chat satu per satu untuk memesan. "
-            "Sistem order online membuat mereka bisa memesan sendiri kapan pun."
-        ),
-    },
-    {
-        "jasa": "Optimasi Google Business Profile",
-        "jalur": "marketing",
-        "cek": lambda s: s["diklaim"] is False,
-        "alasan": lambda s: (
-            "Listing Google Maps Anda terlihat belum diklaim pemiliknya — "
-            "artinya Anda belum bisa mengatur info, foto, dan membalas ulasan, "
-            "dan kompetitor bisa tampil di atas Anda."
-        ),
-    },
-    {
-        "jasa": "Reputation Management + Ads",
-        "jalur": "marketing",
-        "cek": lambda s: s["rating"] and s["rating"] < 4.0 and s["ulasan"] >= 30,
-        "alasan": lambda s: (
-            f"Rating {s['rating']:.1f} dari {s['ulasan']} ulasan jadi penghambat "
-            "utama — calon pelanggan membandingkan angka ini sebelum menghubungi."
-        ),
-    },
-    {
-        "jasa": "Optimasi Google Business Profile",
-        "jalur": "marketing",
-        "cek": lambda s: s["rating"] >= 4.0 and 0 < s["ulasan"] < 10,
-        "alasan": lambda s: (
-            f"Rating Anda bagus ({s['rating']:.1f}) tapi baru {s['ulasan']} "
-            "ulasan, jadi Anda kalah tampil dari kompetitor di pencarian Maps."
-        ),
-    },
-    {
-        "jasa": "Scale-up Google & Meta Ads",
-        "jalur": "marketing",
-        "cek": lambda s: s["punya_web"] and s["pixel"] is True,
-        "alasan": lambda s: (
-            "Website Anda sudah terpasang tracking iklan — tinggal dioptimasi "
-            "supaya biaya per leadnya turun dan jumlah leadnya naik."
-        ),
-    },
-    {
-        "jasa": "Google Ads + Setup Tracking",
-        "jalur": "marketing",
-        "cek": lambda s: s["punya_web"] and s["pixel"] is False,
-        "alasan": lambda s: (
-            "Website Anda sudah bagus tapi belum ada tracking sama sekali, jadi "
-            "setiap rupiah yang dikeluarkan untuk promosi tidak bisa diukur "
-            "hasilnya."
-        ),
-    },
-    {
-        # Jaring terakhir: bisnis punya website tapi belum pernah diperiksa,
-        # jadi belum ada dasar untuk menentukan jasanya. Diberi label yang
-        # menyebut langkah berikutnya, bukan sekadar "tidak tahu".
-        "jasa": "Perlu Cek Website Dulu",
-        "jalur": "",
-        "cek": lambda s: s["ada_url"] and s["web_status_kosong"],
-        "alasan": lambda s: (
-            "Bisnis ini punya website tapi kondisinya belum diperiksa. Nyalakan "
-            "opsi \"Buka website tiap lead\" saat scraping untuk mendapat "
-            "rekomendasi jasa yang tepat."
-        ),
-    },
+DIAGNOSA = {
+    # ── Kondisi website ──
+    "web_mati":          lambda s: s["ada_url"] and s["web_mati"],
+    "belum_punya_web":   lambda s: not s["ada_url"],
+    "punya_web":         lambda s: s["punya_web"],
+    "sosmed_saja":       lambda s: s["sosmed_saja"],
+    "web_gratisan":      lambda s: s["punya_web"] and s["gratisan"],
+    "tanpa_https":       lambda s: s["punya_web"] and s["https"] is False,
+    "tidak_mobile":      lambda s: s["punya_web"] and s["mobile"] is False,
+    "web_lambat":        lambda s: s["punya_web"] and (s["load_ms"] or 0) > 5000,
+    "web_basi":          lambda s: s["punya_web"] and s["basi"],
+    "tanpa_toko_online": lambda s: s["punya_web"] and s["toko_online"] is False,
+    "web_belum_dicek":   lambda s: s["ada_url"] and s["web_status_kosong"],
+
+    # ── Kehadiran & reputasi di Google Maps ──
+    "belum_diklaim": lambda s: s["diklaim"] is False,
+    "rating_buruk":  lambda s: bool(s["rating"]) and s["rating"] < 4.0 and s["ulasan"] >= 30,
+    "ulasan_minim":  lambda s: s["rating"] >= 4.0 and 0 < s["ulasan"] < 10,
+    "bisnis_mapan":  lambda s: s["ulasan"] >= 20 and s["rating"] >= 4.0,
+
+    # ── Jejak iklan ──
+    "sudah_pixel": lambda s: s["punya_web"] and s["pixel"] is True,
+    "tanpa_pixel": lambda s: s["punya_web"] and s["pixel"] is False,
+
+    # ── Media sosial (tiga keadaan — lihat catatan di sinyal()) ──
+    "sosmed_ada":         lambda s: s["sosmed_ada"],
+    "sosmed_kosong":      lambda s: s["sosmed_dicek"] and not s["sosmed_ada"],
+    "sosmed_belum_dicek": lambda s: not s["sosmed_dicek"] and not s["sosmed_ada"],
+
+    # ── Aset visual & jenis usaha ──
+    "aset_visual_lemah": lambda s: s["foto"] is not None and _bulat(s["foto"]) == 0,
+    "kategori_retail":   lambda s: _cocok(s["kategori"], KATEGORI_RETAIL),
+    "kategori_visual":   lambda s: _cocok(s["kategori"], KATEGORI_VISUAL),
+}
+
+
+# ─── Katalog jasa ────────────────────────────────────────────────────────────
+# Sumber sebenarnya ada di data/jasa.json. Daftar di bawah hanya jaring pengaman
+# supaya scraping tetap menghasilkan rekomendasi kalau berkas itu hilang atau
+# salah ketik — bukan salinan lengkap, jadi jangan dipakai sebagai acuan.
+
+KATALOG_BAWAAN = [
+    {"nama": "Website Baru (URGENT)", "jalur": "web", "bobot": 95,
+     "diagnosa": ["web_mati"],
+     "pitch": "Website Anda saat ini tidak bisa diakses — calon pelanggan yang "
+              "mencari nama Anda di Google berakhir di halaman error."},
+    {"nama": "Website Company Profile", "jalur": "web", "bobot": 85,
+     "diagnosa": ["belum_punya_web", "bisnis_mapan"],
+     "pitch": "Bisnis Anda jelas ramai — {ulasan} ulasan dengan rating {rating} — "
+              "tapi belum punya website."},
+    {"nama": "Kelola Akun Sosmed", "jalur": "marketing", "bobot": 84,
+     "diagnosa": ["sosmed_kosong", "bisnis_mapan"],
+     "pitch": "Bisnis Anda jelas ramai ({ulasan} ulasan), tapi belum ada akun "
+              "media sosial yang menangkap calon pelanggan di sana."},
+    {"nama": "Branding & Identitas Visual", "jalur": "kreatif", "bobot": 75,
+     "diagnosa": ["aset_visual_lemah", "bisnis_mapan"],
+     "pitch": "Bisnis Anda sudah dipercaya {ulasan} pelanggan, tapi listing "
+              "Google Maps Anda belum punya satu pun foto."},
+    {"nama": "Optimasi Google Business Profile", "jalur": "marketing", "bobot": 74,
+     "diagnosa": ["belum_diklaim"],
+     "pitch": "Listing Google Maps Anda terlihat belum diklaim pemiliknya."},
+    {"nama": "Website Company Profile", "jalur": "web", "bobot": 40,
+     "diagnosa": ["belum_punya_web"],
+     "pitch": "Bisnis Anda belum punya website — pelanggan hanya bisa menilai "
+              "dari listing Google Maps."},
 ]
+
+_katalog_cache = None
+
+
+def _muat_katalog(muat_ulang=False):
+    """
+    Baca data/jasa.json sekali lalu simpan di memori.
+
+    Berkas rusak / hilang TIDAK boleh menjatuhkan scraping yang sudah berjalan
+    setengah jalan, jadi kegagalan apa pun jatuh ke KATALOG_BAWAAN.
+    """
+    global _katalog_cache
+    if _katalog_cache is not None and not muat_ulang:
+        return _katalog_cache
+
+    entri = []
+    try:
+        data = json.loads(KATALOG_FILE.read_text(encoding="utf-8"))
+        entri = [e for e in data.get("jasa", [])
+                 if isinstance(e, dict) and e.get("nama") and e.get("diagnosa")]
+    except Exception:
+        entri = []
+
+    if not entri:
+        entri = [dict(e) for e in KATALOG_BAWAAN]
+
+    # Bobot tertinggi lebih dulu. Sort Python stabil, jadi saat bobotnya seri
+    # urutan di dalam berkas yang menentukan — satu-satunya peran urutan.
+    entri.sort(key=lambda e: -_angka(e.get("bobot"), 0))
+    _katalog_cache = entri
+    return _katalog_cache
+
+
+def _isi_pitch(teks, s):
+    """Ganti placeholder {ulasan}, {rating}, dst dengan angka bisnis ini."""
+    nilai = {
+        "nama": s["nama"],
+        "kategori": s["kategori"] or "bisnis seperti Anda",
+        "rating": f"{s['rating']:.1f}",
+        "ulasan": s["ulasan"],
+        "platform": s["platform"] or "builder gratisan",
+        "tahun_web": s["tahun_web"] or "-",
+        "load_detik": f"{(s['load_ms'] or 0) / 1000:.1f}",
+    }
+    try:
+        return str(teks).format(**nilai)
+    except Exception:
+        # Placeholder salah ketik di JSON — kirim apa adanya, jangan buang pitch.
+        return str(teks)
 
 
 def rekomendasi_jasa(row):
@@ -391,14 +391,29 @@ def rekomendasi_jasa(row):
     Tentukan jasa yang paling pas ditawarkan ke satu bisnis.
 
     Return dict: jasa_utama, jasa_pendukung (maks 2, dipisah " | "),
-    alasan_pitch (satu kalimat siap kirim), jalur ("web"/"marketing").
+    alasan_pitch (satu kalimat siap kirim), jalur (nama tim, mis. "web").
     """
     s = sinyal(row)
+
+    # Diperiksa di luar mekanisme bobot: bisnis yang sudah tutup tidak boleh
+    # sempat diberi label jasa apa pun, setinggi apa pun bobotnya.
+    if ("permanen" in s["status_buka"].lower()
+            or "closed" in s["status_buka"].lower()):
+        return {
+            "jasa_utama": "Bisnis Tutup — Lewati",
+            "jasa_pendukung": "",
+            "alasan_pitch": "",
+            "jalur": "",
+        }
+
     cocok = []
-    for r in RULES:
+    for entri in _muat_katalog():
         try:
-            if r["cek"](s):
-                cocok.append(r)
+            # Semua diagnosa harus terpenuhi (AND). Nama diagnosa yang tidak
+            # dikenal melempar KeyError dan entri itu dilewati — persis seperti
+            # yang dijanjikan catatan di data/jasa.json.
+            if all(DIAGNOSA[d](s) for d in entri["diagnosa"]):
+                cocok.append(entri)
         except Exception:
             continue  # aturan tidak berlaku untuk data setengah lengkap
 
@@ -410,24 +425,19 @@ def rekomendasi_jasa(row):
             "jalur": "",
         }
 
-    utama = cocok[0]
+    utama = cocok[0]  # katalog sudah urut bobot menurun
     pendukung = []
-    for r in cocok[1:]:
-        if r["jasa"] != utama["jasa"] and r["jasa"] not in pendukung:
-            pendukung.append(r["jasa"])
+    for e in cocok[1:]:
+        if e["nama"] != utama["nama"] and e["nama"] not in pendukung:
+            pendukung.append(e["nama"])
         if len(pendukung) >= 2:
             break
 
-    try:
-        alasan = utama["alasan"](s)
-    except Exception:
-        alasan = ""
-
     return {
-        "jasa_utama": utama["jasa"],
+        "jasa_utama": utama["nama"],
         "jasa_pendukung": " | ".join(pendukung),
-        "alasan_pitch": alasan,
-        "jalur": utama["jalur"],
+        "alasan_pitch": _isi_pitch(utama.get("pitch", ""), s),
+        "jalur": utama.get("jalur", ""),
     }
 
 
@@ -437,7 +447,9 @@ def skor_pembeli(row, jumlah_cabang=1):
     """
     Skor 0-100 dari tiga dimensi yang harus terpenuhi bersamaan.
 
-      BUTUH (maks 40)          — seberapa besar masalah digitalnya
+      BUTUH (maks 40)          — seberapa besar masalah digitalnya, dari dua
+                                 sisi yang dibatasi terpisah: aset web (maks 28)
+                                 dan kehadiran marketing (maks 22)
       MAMPU BAYAR (maks 35)    — seberapa besar bisnisnya
       BISA DIHUBUNGI (maks 25) — ada jalur kontak yang benar-benar bisa dipakai
 
@@ -450,42 +462,62 @@ def skor_pembeli(row, jumlah_cabang=1):
     rincian = {}
 
     # ── A. BUTUH ──
-    # Catatan kalibrasi: bisnis TANPA website sama sekali tidak punya sinyal
-    # HTTPS/mobile/kecepatan untuk dinilai, jadi kalau bobotnya kecil ia justru
-    # kalah skor dari bisnis yang punya website jelek — padahal ia prospek yang
-    # jauh lebih baik. Karena itu dua kondisi di bawah diberi bobot besar.
-    butuh = 0
+    # Dipecah jadi dua sub-ember yang dibatasi sendiri-sendiri, baru dijumlahkan.
+    #
+    # Versi lama menumpuk semuanya jadi satu ember maks 40 yang isinya didominasi
+    # poin website ("belum punya website" saja sudah 28 dari 40). Akibatnya
+    # bisnis dengan website bagus tapi nol media sosial — justru klien ideal jasa
+    # iklan & konten — tidak pernah bisa mengumpulkan poin BUTUH yang cukup dan
+    # selalu terlempar ke tier DINGIN/ARSIP.
+    #
+    # Dengan dua ember terpisah, bisnis yang lemah hanya di SATU sisi tetap bisa
+    # mencapai tier atas, tanpa membuat yang lemah di KEDUA sisi jadi kelebihan
+    # poin — jumlahnya tetap dibatasi 40.
+    butuh_web = 0
     if not s["ada_url"] or s["sosmed_saja"]:
-        butuh += 28
+        butuh_web += 28
         rincian["belum punya website sendiri"] = 28
     if s["ada_url"] and s["web_mati"]:
-        butuh += 28
+        butuh_web += 28
         rincian["website mati/error"] = 28
     if s["punya_web"] and s["gratisan"]:
-        butuh += 12
+        butuh_web += 12
         rincian["platform gratisan"] = 12
-    if s["diklaim"] is False:
-        butuh += 8
-        rincian["listing belum diklaim"] = 8
     if s["https"] is False:
-        butuh += 8
+        butuh_web += 8
         rincian["tanpa HTTPS"] = 8
     if s["mobile"] is False:
-        butuh += 8
+        butuh_web += 8
         rincian["tidak ramah HP"] = 8
     if (s["load_ms"] or 0) > 5000:
-        butuh += 6
+        butuh_web += 6
         rincian["website lambat"] = 6
     if s["basi"]:
-        butuh += 6
+        butuh_web += 6
         rincian["situs terbengkalai"] = 6
+    butuh_web = min(butuh_web, 28)
+
+    butuh_mkt = 0
+    # Hanya dihitung kalau memang sempat diperiksa. Kolom sosmed yang kosong
+    # karena bisnisnya tidak punya website bukan bukti mereka tidak punya akun.
+    if s["sosmed_dicek"] and not s["sosmed_ada"]:
+        butuh_mkt += 14
+        rincian["belum ada media sosial"] = 14
+    if s["diklaim"] is False:
+        butuh_mkt += 8
+        rincian["listing belum diklaim"] = 8
     if s["pixel"] is False:
-        butuh += 6
+        butuh_mkt += 6
         rincian["belum ada tracking iklan"] = 6
     if s["foto"] is not None and _bulat(s["foto"]) == 0:
-        butuh += 4
-        rincian["listing tanpa foto"] = 4
-    butuh = min(butuh, 40)
+        butuh_mkt += 6
+        rincian["listing tanpa foto"] = 6
+    if s["rating"] and s["rating"] < 4.0 and s["ulasan"] >= 30:
+        butuh_mkt += 6
+        rincian["rating jadi penghambat"] = 6
+    butuh_mkt = min(butuh_mkt, 22)
+
+    butuh = min(butuh_web + butuh_mkt, 40)
 
     # ── B. MAMPU BAYAR ──
     mampu = 0
@@ -588,7 +620,6 @@ def nilai_lead(row, jumlah_cabang=1):
     row["tier"] = hasil["tier"]
     row["skor_popularitas"] = skor_popularitas(row.get("rating"),
                                                row.get("jumlah_ulasan"))
-    row.pop("jalur", None)
     return row
 
 

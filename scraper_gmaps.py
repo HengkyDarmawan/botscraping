@@ -51,7 +51,9 @@ def _params_dari_config():
         "require_whatsapp": getattr(config, "REQUIRE_WHATSAPP", True),
         "require_no_website": getattr(config, "REQUIRE_NO_WEBSITE", True),
         "sertakan_bisnis_tutup": getattr(config, "SERTAKAN_BISNIS_TUTUP", False),
-        "listing_konkuren": getattr(config, "LISTING_KONKUREN", 3),
+        "listing_konkuren": getattr(config, "LISTING_KONKUREN", 0),
+        "mode_cepat": getattr(config, "MODE_CEPAT", False),
+        "blokir_gambar": getattr(config, "BLOKIR_GAMBAR", True),
 
         "dedup_enabled": getattr(config, "DEDUP_ENABLED", True),
         "dedup_bulan": getattr(config, "DEDUP_BULAN", 6),
@@ -116,6 +118,9 @@ def main():
     print("=" * 60)
     print("  LeadScraper Pro — Google Maps (mode terminal)")
     print(f"  {len(params['search_targets'])} target · maks {params['max_results']} hasil per target")
+    if params.get("mode_cepat"):
+        print("  ⚡ Mode Cepat: halaman detail hanya dibuka bila kartu feed "
+              "kurang lengkap")
     if params["dedup_enabled"]:
         print(f"  Anti-duplikat aktif: lewati bisnis yang sudah ada "
               f"< {params['dedup_bulan']} bulan")
@@ -126,7 +131,12 @@ def main():
     try:
         nama_file = run_scrape(params, _cetak, lambda: _berhenti)
     except KeyboardInterrupt:
-        print("\nDihentikan paksa — hasil run ini tidak disimpan.")
+        # Lead ditulis ke database satu per satu sejak dibaca, jadi keluar
+        # paksa pun tidak menghilangkannya — yang tidak sempat dibuat
+        # hanya file Excelnya.
+        print("\nDihentikan paksa. Lead yang sudah terkumpul tetap ada di "
+              "database — buka halaman Leads, atau jalankan `python app.py` "
+              "dan pakai tombol Lanjutkan run.")
         return 130
 
     status = "Dihentikan" if _berhenti else "Selesai"

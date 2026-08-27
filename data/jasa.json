@@ -1,0 +1,194 @@
+{
+  "_catatan": [
+    "Katalog jasa yang ditawarkan ke lead. File ini boleh diedit bebas —",
+    "menambah jasa baru TIDAK perlu mengubah kode Python.",
+    "",
+    "  nama     : judul jasa, muncul di kolom jasa_utama pada Excel & halaman /leads.",
+    "  jalur    : tim penanggung jawab — 'web', 'marketing', atau 'kreatif'.",
+    "             Bebas menambah jalur baru; nilainya hanya dipakai untuk mengelompokkan.",
+    "  bobot    : 0-100, seberapa mendesak. Jasa dengan bobot TERTINGGI di antara",
+    "             yang cocok jadi jasa_utama; dua berikutnya jadi jasa_pendukung.",
+    "             Ini menggantikan urutan daftar — posisi entri di file tidak menentukan",
+    "             apa pun kecuali saat bobotnya seri.",
+    "  diagnosa : daftar kondisi yang SEMUANYA harus terpenuhi (AND).",
+    "             Nama diagnosa yang tersedia ada di DIAGNOSA pada scrapers/scoring.py.",
+    "             Diagnosa yang tidak dikenal membuat entri ini dilewati diam-diam,",
+    "             jadi salah ketik tidak pernah menjatuhkan proses scraping.",
+    "  pitch    : satu kalimat pembuka siap kirim. Placeholder yang bisa dipakai:",
+    "             {nama} {kategori} {rating} {ulasan} {platform} {tahun_web} {load_detik}",
+    "",
+    "Semakin spesifik diagnosa sebuah entri, semakin tinggi bobotnya sebaiknya —",
+    "supaya jasa yang cocoknya kebetulan tidak mengalahkan jasa yang benar-benar pas."
+  ],
+
+  "jasa": [
+    {
+      "nama": "Website Baru (URGENT)",
+      "jalur": "web",
+      "bobot": 95,
+      "diagnosa": ["web_mati"],
+      "pitch": "Website Anda saat ini tidak bisa diakses — calon pelanggan yang mencari nama Anda di Google berakhir di halaman error dan pindah ke kompetitor."
+    },
+    {
+      "nama": "Reputation Management + Ads",
+      "jalur": "marketing",
+      "bobot": 88,
+      "diagnosa": ["rating_buruk"],
+      "pitch": "Rating {rating} dari {ulasan} ulasan jadi penghambat utama — calon pelanggan membandingkan angka ini sebelum menghubungi."
+    },
+    {
+      "nama": "Website Company Profile",
+      "jalur": "web",
+      "bobot": 85,
+      "diagnosa": ["belum_punya_web", "bisnis_mapan"],
+      "pitch": "Bisnis Anda jelas ramai — {ulasan} ulasan dengan rating {rating} — tapi belum punya website. Calon pelanggan yang mencari di Google tidak menemukan Anda."
+    },
+    {
+      "nama": "Kelola Akun Sosmed",
+      "jalur": "marketing",
+      "bobot": 84,
+      "diagnosa": ["sosmed_kosong", "bisnis_mapan"],
+      "pitch": "Bisnis Anda jelas ramai ({ulasan} ulasan), tapi belum ada akun media sosial yang menangkap calon pelanggan yang mencari Anda di Instagram dan TikTok."
+    },
+    {
+      "nama": "Landing Page + Iklan Sosmed",
+      "jalur": "web",
+      "bobot": 82,
+      "diagnosa": ["sosmed_saja"],
+      "pitch": "Anda sudah aktif berjualan online, tapi tautan {nama} masih mengarah ke media sosial/marketplace — belum ada halaman milik sendiri yang bisa dioptimasi dan diiklankan."
+    },
+    {
+      "nama": "Landing Page + Iklan Instagram",
+      "jalur": "web",
+      "bobot": 80,
+      "diagnosa": ["belum_punya_web", "sosmed_ada"],
+      "pitch": "Anda sudah punya audiens di media sosial tapi belum punya website. Satu landing page saja sudah cukup untuk mengubah pengikut jadi pesanan yang terukur."
+    },
+    {
+      "nama": "Scale-up Google & Meta Ads",
+      "jalur": "marketing",
+      "bobot": 79,
+      "diagnosa": ["sudah_pixel"],
+      "pitch": "Website Anda sudah terpasang tracking iklan — tinggal dioptimasi supaya biaya per leadnya turun dan jumlah leadnya naik."
+    },
+    {
+      "nama": "Upgrade Website Profesional",
+      "jalur": "web",
+      "bobot": 78,
+      "diagnosa": ["web_gratisan"],
+      "pitch": "Website Anda masih memakai platform gratisan ({platform}) — alamatnya bukan domain milik sendiri dan kurang meyakinkan di mata calon klien."
+    },
+    {
+      "nama": "Redesign + Pasang SSL",
+      "jalur": "web",
+      "bobot": 76,
+      "diagnosa": ["tanpa_https"],
+      "pitch": "Website Anda belum memakai HTTPS, jadi Chrome menandainya 'Tidak Aman' dan memperingatkan pengunjung sebelum mereka masuk."
+    },
+    {
+      "nama": "Branding & Identitas Visual",
+      "jalur": "kreatif",
+      "bobot": 75,
+      "diagnosa": ["aset_visual_lemah", "bisnis_mapan"],
+      "pitch": "Bisnis Anda sudah dipercaya {ulasan} pelanggan, tapi listing Google Maps Anda belum punya satu pun foto — calon pelanggan baru tidak punya bahan untuk menilai sebelum datang."
+    },
+    {
+      "nama": "Optimasi Google Business Profile",
+      "jalur": "marketing",
+      "bobot": 74,
+      "diagnosa": ["belum_diklaim"],
+      "pitch": "Listing Google Maps Anda terlihat belum diklaim pemiliknya — artinya Anda belum bisa mengatur info, foto, dan membalas ulasan, dan kompetitor bisa tampil di atas Anda."
+    },
+    {
+      "nama": "Redesign Mobile-First",
+      "jalur": "web",
+      "bobot": 72,
+      "diagnosa": ["tidak_mobile"],
+      "pitch": "Website Anda belum ramah layar HP, padahal hampir semua pelanggan membukanya dari ponsel."
+    },
+    {
+      "nama": "Google Ads + Setup Tracking",
+      "jalur": "marketing",
+      "bobot": 70,
+      "diagnosa": ["tanpa_pixel"],
+      "pitch": "Website Anda sudah bagus tapi belum ada tracking sama sekali, jadi setiap rupiah yang dikeluarkan untuk promosi tidak bisa diukur hasilnya."
+    },
+    {
+      "nama": "Optimasi Google Business Profile",
+      "jalur": "marketing",
+      "bobot": 68,
+      "diagnosa": ["ulasan_minim"],
+      "pitch": "Rating Anda bagus ({rating}) tapi baru {ulasan} ulasan, jadi Anda kalah tampil dari kompetitor di pencarian Maps."
+    },
+    {
+      "nama": "Redesign (situs terbengkalai)",
+      "jalur": "web",
+      "bobot": 66,
+      "diagnosa": ["web_basi"],
+      "pitch": "Website Anda terakhir diperbarui tahun {tahun_web} — informasi dan tampilannya sudah tertinggal dari kondisi bisnis Anda sekarang."
+    },
+    {
+      "nama": "Konten & Desain Grafis",
+      "jalur": "kreatif",
+      "bobot": 65,
+      "diagnosa": ["sosmed_ada", "aset_visual_lemah"],
+      "pitch": "Akun media sosial Anda sudah jalan, tapi listing Google Maps Anda kosong tanpa foto — materi visual yang sama bisa dipakai di kedua tempat sekaligus."
+    },
+    {
+      "nama": "Optimasi Kecepatan Website",
+      "jalur": "web",
+      "bobot": 64,
+      "diagnosa": ["web_lambat"],
+      "pitch": "Website Anda butuh sekitar {load_detik} detik untuk terbuka. Google menurunkan peringkat situs selambat itu dan sebagian pengunjung pergi sebelum halaman muncul."
+    },
+    {
+      "nama": "Toko Online / Sistem Order",
+      "jalur": "web",
+      "bobot": 62,
+      "diagnosa": ["tanpa_toko_online", "kategori_retail"],
+      "pitch": "Pelanggan Anda masih harus chat satu per satu untuk memesan. Sistem order online membuat mereka bisa memesan sendiri kapan pun."
+    },
+    {
+      "nama": "3D Design & Visualisasi",
+      "jalur": "kreatif",
+      "bobot": 60,
+      "diagnosa": ["kategori_visual", "aset_visual_lemah"],
+      "pitch": "Calon klien {kategori} memutuskan dari apa yang mereka lihat — render 3D membuat mereka bisa membayangkan hasil akhirnya sebelum tanda tangan."
+    },
+    {
+      "nama": "Kelola Akun Sosmed",
+      "jalur": "marketing",
+      "bobot": 58,
+      "diagnosa": ["sosmed_kosong"],
+      "pitch": "Bisnis Anda belum punya akun media sosial yang aktif, padahal di sinilah calon pelanggan sekarang mencari referensi sebelum memutuskan."
+    },
+    {
+      "nama": "Konten & Desain Grafis",
+      "jalur": "kreatif",
+      "bobot": 45,
+      "diagnosa": ["aset_visual_lemah"],
+      "pitch": "Listing Google Maps Anda belum menampilkan foto sama sekali — padahal foto adalah hal pertama yang dilihat orang sebelum memutuskan mampir."
+    },
+    {
+      "nama": "Website Company Profile",
+      "jalur": "web",
+      "bobot": 40,
+      "diagnosa": ["belum_punya_web"],
+      "pitch": "Bisnis Anda belum punya website — pelanggan hanya bisa menilai dari listing Google Maps, sementara kompetitor sudah tampil lebih profesional."
+    },
+    {
+      "nama": "Perlu Cek Website Dulu",
+      "jalur": "",
+      "bobot": 20,
+      "diagnosa": ["web_belum_dicek"],
+      "pitch": "Bisnis ini punya website tapi kondisinya belum diperiksa. Nyalakan opsi \"Buka website tiap lead\" saat scraping untuk mendapat rekomendasi jasa yang tepat."
+    },
+    {
+      "nama": "Perlu Cek Sosmed Dulu",
+      "jalur": "",
+      "bobot": 18,
+      "diagnosa": ["sosmed_belum_dicek"],
+      "pitch": "Bisnis ini tidak mencantumkan tautan apa pun di Google Maps, jadi belum ketahuan punya akun media sosial atau tidak. Cek manual sebentar sebelum menawarkan jasa kelola sosmed."
+    }
+  ]
+}

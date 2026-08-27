@@ -277,6 +277,67 @@ def gmaps_run():
     return jsonify({"job_id": job_id})
 
 
+@app.route("/gmaps/terputus")
+def gmaps_terputus():
+    """
+    Run terakhir yang mati sebelum semua targetnya selesai.
+
+    Ditandai oleh db.init_db() saat app dijalankan lagi: run yang masih
+    berstatus "berjalan" berarti prosesnya sudah tidak ada. Leadnya sudah aman
+    di database — yang ditawarkan di sini adalah mengerjakan sisa targetnya.
+    """
+    run = db.run_terputus_terakhir()
+    if not run:
+        return jsonify({"ada": False})
+    return jsonify({
+        "ada": True,
+        "run_id": run["run_id"],
+        "mulai_pada": run.get("mulai_pada"),
+        "target_selesai": run.get("target_index"),
+        "total_target": run.get("total_target"),
+        "sisa_target": run.get("sisa_target"),
+        "jumlah_lead": run.get("jumlah_lead"),
+    })
+
+
+@app.route("/gmaps/lanjutkan", methods=["POST"])
+def gmaps_lanjutkan():
+    """
+    Kerjakan sisa target sebuah run yang terputus, di bawah run_id yang SAMA.
+
+    run_id dipertahankan supaya file hasil di akhir memuat seluruh lead run itu
+    — termasuk yang dikumpulkan sebelum terputus — bukan cuma hasil sisanya.
+    Kredensial (token proxy & API key Gemini) tidak pernah disimpan di database,
+    jadi keduanya diambil ulang dari form yang sedang terbuka.
+    """
+    body = request.json or {}
+    run_id = body.get("run_id")
+    run = db.run_get(run_id)
+    if not run:
+        return jsonify({"ok": False, "error": "Run tidak ditemukan"}), 404
+
+    params = dict(run.get("params") or {})
+    semua_target = params.get("search_targets") or []
+    sudah = int(run.get("target_index") or 0)
+    sisa = semua_target[sudah:]
+    if not sisa:
+        return jsonify({"ok": False,
+                        "error": "Run ini sudah menyelesaikan semua targetnya"}), 400
+
+    params["search_targets"] = sisa
+    params["_run_id"] = run_id
+    params["_offset_target"] = sudah
+    params["_total_target"] = int(run.get("total_target") or len(semua_target))
+    for rahasia in ("apify_proxy_token", "gemini_api_key"):
+        if body.get(rahasia):
+            params[rahasia] = body[rahasia]
+
+    from scrapers.gmaps import run_scrape
+    job_id = _new_job()
+    _jalankan(job_id, run_scrape, params, "Lanjutan scraping")
+    return jsonify({"ok": True, "job_id": job_id, "sisa_target": len(sisa)})
+
+
 # ─── Cek proxy Apify ──────────────────────────────────────────────────────────
 
 @app.route("/check-proxy", methods=["POST"])
@@ -616,6 +677,7 @@ def _filter_dari_request():
         "skor_min": i("skor_min"),
         "skor_max": i("skor_max"),
         "q": s("q"),
+        "run": s("run"),
         "urut": request.args.get("urut") or "skor_pembeli",
     }
 
