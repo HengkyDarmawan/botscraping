@@ -1,0 +1,14 @@
+# Data hasil kerja & CRM — milik lokal, bukan kode.
+data/*.db
+data/*.db-shm
+data/*.db-wal
+data/chrome_profile/
+data/stores.json
+data/mp_endpoints.json
+data/arsip-*.zip
+data/backup/
+output/
+
+# Python
+__pycache__/
+*.pyc
