@@ -1,0 +1,442 @@
+{% extends "base.html" %}
+{% block title %}Scraper Komponen{% endblock %}
+{% block page_title %}<i class="bi bi-cpu-fill text-info me-2"></i>Scraper Leads Komponen Komputer{% endblock %}
+
+{% block content %}
+
+<div id="bannerTerputus" class="alert alert-warning d-none align-items-center mb-4">
+  <i class="bi bi-exclamation-triangle-fill fs-4 me-3"></i>
+  <div class="flex-grow-1">
+    <div class="fw-bold">Run terakhir terputus</div>
+    <div id="terputusInfo" style="font-size:.85rem"></div>
+  </div>
+  <div class="text-nowrap">
+    <button class="btn btn-warning btn-sm fw-bold" onclick="lanjutkanRun()">
+      <i class="bi bi-play-fill"></i> Lanjutkan run
+    </button>
+    <a id="btnLeadsRun" class="btn btn-outline-secondary btn-sm ms-1" href="#">
+      <i class="bi bi-list-ul"></i> Lihat leadnya
+    </a>
+    <button class="btn btn-link btn-sm text-muted ms-1" onclick="tutupBannerTerputus()">Tutup</button>
+  </div>
+</div>
+
+<div class="row g-3 mb-4">
+  {% for label, nilai, warna, link in [
+      ('Lead Komponen Aktif', stats.total, '#0dcaf0', '/komponen/leads'),
+      ('Punya WhatsApp', stats.punya_wa, '#25d366', '/komponen/leads?wa=1'),
+      ('Punya Email', stats.punya_email, '#6f42c1', '/komponen/leads?email=1'),
+      ('Follow-up Hari Ini', stats.follow_up_hari_ini, '#fd7e14', '/komponen/leads?fu=1&urut=follow_up')] %}
+  <div class="col-6 col-lg-3">
+    <a href="{{ link }}" class="text-decoration-none text-reset">
+      <div class="stat-card" style="border-left-color: {{ warna }}">
+        <div class="stat-num">{{ nilai }}</div>
+        <div class="stat-label">{{ label }}</div>
+      </div>
+    </a>
+  </div>
+  {% endfor %}
+</div>
+
+<div class="row g-4">
+  <div class="col-lg-5">
+    <div class="card">
+      <div class="card-header text-white" style="background:#0b7285">
+        <i class="bi bi-sliders me-2"></i>Konfigurasi Pencarian
+      </div>
+      <div class="card-body">
+
+        <div class="alert alert-info py-2 px-3" style="font-size:.78rem">
+          <i class="bi bi-database me-1"></i>Data menu ini disimpan di <strong>database
+          terpisah</strong> (<code>data/komponen.db</code>). Tidak tercampur dengan lead
+          klien website, dan anti-duplikatnya juga terpisah.
+        </div>
+
+        <div class="mb-3">
+          <label class="form-label">Target Pencarian <span class="text-danger">*</span></label>
+          <div id="targetList">
+            <div class="target-row mb-2">
+              <div class="wp-label">Jenis bisnis (calon pembeli)</div>
+              <div class="jenis-host mb-2" data-sumber="/api/keywords-komponen"></div>
+              <div class="wp-label">Wilayah</div>
+              <div class="wilayah-host"></div>
+              <div class="text-end mt-2">
+                <button class="btn btn-outline-danger btn-sm" onclick="removeTarget(this)">
+                  <i class="bi bi-trash"></i> Hapus baris
+                </button>
+              </div>
+            </div>
+          </div>
+          <button class="btn btn-outline-info btn-sm mt-1" onclick="addTarget()">
+            <i class="bi bi-plus-circle me-1"></i>Tambah Baris Target
+          </button>
+          <div class="form-text">
+            Setiap <strong>jenis bisnis</strong> dicari di <strong>setiap wilayah</strong>.
+            Buka "Pintasan lainnya" untuk memilih satu segmen sekaligus (mis. semua
+            Reseller &amp; Toko Komputer).
+          </div>
+        </div>
+
+        <div class="row g-2 mb-3">
+          <div class="col-6">
+            <label class="form-label">Lead aktif / pencarian</label>
+            <input type="number" id="maxResults" class="form-control" value="20" min="1" max="120"
+                   oninput="hitungEstimasi()">
+            <div class="form-text" style="font-size:.72rem">
+              Jumlah lead yang lolos semua syarat. Listing yang ternyata tutup atau
+              tanpa kontak tidak ikut dihitung.
+            </div>
+          </div>
+          <div class="col-6">
+            <label class="form-label">Radius (km)</label>
+            <input type="number" id="radiusKm" class="form-control" value="0" min="0" step="1">
+            <div class="form-text" style="font-size:.72rem">0 = biarkan Google menentukan.</div>
+          </div>
+        </div>
+
+        <div class="mb-3">
+          <label class="form-label mb-1">Kontak yang wajib ada</label>
+          <select id="modeKontak" class="form-select form-select-sm" onchange="infoKontak()">
+            <option value="wa_atau_email" selected>WhatsApp ATAU email (disarankan)</option>
+            <option value="wa">WhatsApp wajib</option>
+            <option value="email">Email wajib</option>
+            <option value="wa_dan_email">WhatsApp DAN email</option>
+            <option value="telepon">Telepon apa saja (termasuk kantor)</option>
+            <option value="bebas">Bebas, jangan disaring</option>
+          </select>
+          <div id="infoKontak" class="form-text" style="font-size:.72rem"></div>
+        </div>
+
+        <div class="card bg-light border-0 mb-3">
+          <div class="card-body py-3">
+            <h6 class="fw-bold mb-2" style="font-size:.85rem">
+              <i class="bi bi-funnel me-1 text-info"></i>Disaring saat scraping
+            </h6>
+            <ul class="mb-2 ps-3" style="font-size:.78rem">
+              <li><strong>Tutup permanen / sementara</strong> dilewati, termasuk yang pemiliknya
+                sendiri menulis "sudah tutup" di balasan ulasan.</li>
+              <li>Bisnis tanpa kontak yang diminta tidak dijadikan lead.</li>
+              <li>Bisnis yang sudah pernah dilewati tidak dibuka lagi (tutup: 6 bulan, kontak: 30 hari).</li>
+            </ul>
+            <div class="form-check form-switch">
+              <input class="form-check-input" type="checkbox" id="enrichWebsite" checked
+                     onchange="infoKontak(); hitungEstimasi()">
+              <label class="form-check-label" for="enrichWebsite">
+                Buka website tiap bisnis (panen email, WA, Tokopedia/Shopee, sosmed)
+              </label>
+            </div>
+            <div class="form-text ps-4" style="font-size:.72rem">
+              Email hanya bisa didapat dari website bisnis. Banyak toko yang di Google
+              Maps hanya mencantumkan telepon kantor ternyata punya nomor WA di websitenya.
+            </div>
+            <hr class="my-2">
+            <div class="form-check form-switch">
+              <input class="form-check-input" type="checkbox" id="dedupEnabled" checked>
+              <label class="form-check-label" for="dedupEnabled">
+                Lewati bisnis yang sudah ada di database komponen
+              </label>
+            </div>
+            <div class="d-flex align-items-center gap-2 ps-4 mt-1">
+              <small>Masa tenggang</small>
+              <div class="input-group input-group-sm" style="width:120px">
+                <input type="number" id="dedupBulan" class="form-control" value="6" min="1" max="36">
+                <span class="input-group-text">bulan</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="mb-3">
+          <a class="text-decoration-none small text-muted" data-bs-toggle="collapse" href="#lanjutan">
+            <i class="bi bi-gear me-1"></i>Pengaturan lanjutan
+          </a>
+          <div class="collapse mt-2" id="lanjutan">
+            <div class="row g-2 mb-2">
+              <div class="col-6">
+                <label class="form-label d-flex justify-content-between align-items-center">
+                  <span>Min Rating ⭐</span>
+                  <span class="form-check form-switch m-0">
+                    <input class="form-check-input" type="checkbox" id="filterRating"
+                           onchange="document.getElementById('minRating').disabled = !this.checked">
+                  </span>
+                </label>
+                <select id="minRating" class="form-select form-select-sm" disabled>
+                  <option value="3">≥ 3.0</option>
+                  <option value="3.5">≥ 3.5</option>
+                  <option value="4" selected>≥ 4.0</option>
+                  <option value="4.5">≥ 4.5</option>
+                </select>
+              </div>
+              <div class="col-6">
+                <label class="form-label d-flex justify-content-between align-items-center">
+                  <span>Min Ulasan</span>
+                  <span class="form-check form-switch m-0">
+                    <input class="form-check-input" type="checkbox" id="filterReviews"
+                           onchange="document.getElementById('minReviews').disabled = !this.checked">
+                  </span>
+                </label>
+                <input type="number" id="minReviews" class="form-control form-control-sm" value="5" min="0" disabled>
+              </div>
+              <div class="col-6">
+                <label class="form-label">Listing dibuka sekaligus</label>
+                <input type="number" id="listingKonkuren" class="form-control form-control-sm" value="0" min="0" max="12"
+                       oninput="hitungEstimasi()">
+                <div class="form-text" style="font-size:.7rem">0 = otomatis</div>
+              </div>
+              <div class="col-6">
+                <label class="form-label">Format file run</label>
+                <select id="outputFormat" class="form-select form-select-sm">
+                  <option value="excel" selected>Excel (.xlsx)</option>
+                  <option value="csv">CSV (.csv)</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-check form-switch">
+              <input class="form-check-input" type="checkbox" id="sertakanTutup">
+              <label class="form-check-label" for="sertakanTutup">Sertakan bisnis yang tutup (tidak disarankan)</label>
+            </div>
+            <div class="form-check form-switch">
+              <input class="form-check-input" type="checkbox" id="headlessMode" checked>
+              <label class="form-check-label" for="headlessMode">Mode headless (browser tersembunyi)</label>
+            </div>
+            <hr class="my-2">
+            <div class="form-check form-switch mb-2">
+              <input class="form-check-input" type="checkbox" id="useProxy" onchange="hitungEstimasi()">
+              <label class="form-check-label" for="useProxy">Proxy Apify</label>
+            </div>
+            <div class="input-group input-group-sm mb-1">
+              <input type="password" id="apifyToken" class="form-control font-monospace" placeholder="apify_api_...">
+              <button class="btn btn-outline-secondary" type="button" onclick="cekProxy(this)">
+                <i class="bi bi-plug-fill"></i> Tes
+              </button>
+            </div>
+            <div id="proxyStatus" class="mb-2"></div>
+            <div class="row g-1">
+              <div class="col">
+                <select id="apifyGroup" class="form-select form-select-sm">
+                  <option value="RESIDENTIAL" selected>RESIDENTIAL</option>
+                  <option value="DATACENTER">DATACENTER</option>
+                </select>
+              </div>
+              <div class="col">
+                <input type="text" id="apifyCountry" class="form-control form-control-sm" value="ID">
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div id="estimasi" class="text-center text-muted mb-2" style="font-size:.8rem"></div>
+        <button id="runBtn" class="btn btn-scrape w-100" onclick="runKomponen()">
+          <i class="bi bi-play-fill me-2"></i>Mulai Scraping
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-7">
+    <div class="card">
+      <div class="card-header bg-dark text-white d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-activity me-2"></i>Progress</span>
+        <div class="d-flex align-items-center gap-3">
+          <span>Ditemukan: <strong id="foundCount">0</strong> leads</span>
+          <span id="statusBadge" class="badge bg-secondary">Menunggu</span>
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="progress mb-3" style="height:14px">
+          <div id="progressBar" class="progress-bar progress-bar-striped progress-bar-animated" style="width:0%">0%</div>
+        </div>
+        <div class="log-console" id="scrapeLog">
+          <div class="text-muted">Pilih jenis bisnis dan wilayah, lalu tekan "Mulai Scraping"...</div>
+        </div>
+        <div class="mt-3 d-flex gap-2">
+          <a id="downloadBtn" href="#" class="btn btn-success d-none flex-grow-1">
+            <i class="bi bi-download me-2"></i>Download File Run
+          </a>
+          <a href="/komponen/leads" class="btn btn-outline-info flex-grow-1">
+            <i class="bi bi-person-lines-fill me-2"></i>Buka Leads Komponen
+          </a>
+          <button id="stopBtn" class="btn btn-danger d-none flex-grow-1" onclick="stopJob()">
+            <i class="bi bi-stop-fill me-2"></i>Stop
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card mt-3">
+      <div class="card-body">
+        <h6 class="fw-bold"><i class="bi bi-info-circle me-2 text-info"></i>Data yang diambil</h6>
+        <div class="row g-1" style="font-size:.8rem">
+          {% for item in ['📱 Nomor HP / WhatsApp (dari Maps & website)', '📧 Semua email di website (terbaik di depan)',
+                          '🛒 Tokopedia, Shopee & marketplace lain', '📷 Instagram, Facebook, TikTok, LinkedIn, YouTube',
+                          '🌐 Website resmi', '📍 Alamat lengkap + kota (untuk proposal)',
+                          '🏷 Segmen pembeli (reseller, warnet, sekolah, ...)', '⭐ Skor prioritas 0-100'] %}
+          <div class="col-6 text-muted">{{ item }}</div>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="/static/js/wilayah-picker.js"></script>
+<script>
+const pickers = [];
+
+function pasangPicker(row) {
+  const hostWilayah = row.querySelector('.wilayah-host');
+  const hostJenis = row.querySelector('.jenis-host');
+  const wilayah = new WilayahPicker(hostWilayah);
+  const jenis = new KeywordPicker(hostJenis);
+  hostWilayah.addEventListener('wilayah-berubah', hitungEstimasi);
+  hostJenis.addEventListener('wilayah-berubah', hitungEstimasi);
+  pickers.push({ row, picker: wilayah, jenis });
+}
+
+function addTarget() {
+  const div = document.createElement('div');
+  div.className = 'target-row mb-2';
+  div.innerHTML = `
+    <div class="wp-label">Jenis bisnis (calon pembeli)</div>
+    <div class="jenis-host mb-2" data-sumber="/api/keywords-komponen"></div>
+    <div class="wp-label">Wilayah</div>
+    <div class="wilayah-host"></div>
+    <div class="text-end mt-2">
+      <button class="btn btn-outline-danger btn-sm" onclick="removeTarget(this)">
+        <i class="bi bi-trash"></i> Hapus baris
+      </button>
+    </div>`;
+  document.getElementById('targetList').appendChild(div);
+  pasangPicker(div);
+  hitungEstimasi();
+}
+
+function removeTarget(btn) {
+  if (document.querySelectorAll('.target-row').length <= 1) return;
+  const row = btn.closest('.target-row');
+  const i = pickers.findIndex(p => p.row === row);
+  if (i >= 0) pickers.splice(i, 1);
+  row.remove();
+  hitungEstimasi();
+}
+
+function kumpulkanTargets() {
+  const targets = [];
+  pickers.forEach(({ picker, jenis }) => {
+    jenis.nilai().forEach(j => {
+      picker.nilai().forEach(w => targets.push({ jenis: j, area: w.area, coords: w.coords }));
+    });
+  });
+  return targets;
+}
+
+function hitungEstimasi() {
+  const n = kumpulkanTargets().length;
+  const max = parseInt(document.getElementById('maxResults').value) || 0;
+  const diminta = parseInt(document.getElementById('listingKonkuren').value) || 0;
+  const konkuren = diminta > 0 ? diminta : (document.getElementById('useProxy').checked ? 8 : 5);
+  const el = document.getElementById('estimasi');
+  if (!n || !max) { el.textContent = ''; return; }
+  // Listing cadangan dibuka bila perlu untuk menutup yang ternyata tutup / tanpa kontak.
+  let detik = (n * max * 1.5 * 3.5) / konkuren + n * 25;
+  if (document.getElementById('enrichWebsite').checked) detik *= 1.3;
+  const menit = Math.round(detik / 60);
+  el.innerHTML = `<i class="bi bi-clock me-1"></i>${n} pencarian × ${max} lead — perkiraan
+    <strong>${menit < 1 ? '<1' : (menit > 90 ? (menit / 60).toFixed(1) + ' jam' : menit + ' menit')}</strong>`;
+  if (n > 200 || menit > 180) {
+    el.innerHTML += `<div class="text-danger mt-1" style="font-size:.72rem">
+      <i class="bi bi-exclamation-triangle me-1"></i>Run besar — pecah jadi beberapa run.</div>`;
+  }
+}
+
+function infoKontak() {
+  const mode = document.getElementById('modeKontak').value;
+  const enrich = document.getElementById('enrichWebsite').checked;
+  const el = document.getElementById('infoKontak');
+  const butuhEmail = ['email', 'wa_dan_email'].includes(mode);
+  if (butuhEmail && !enrich) {
+    el.className = 'form-text text-danger';
+    el.innerHTML = '<i class="bi bi-x-octagon me-1"></i>Email hanya didapat dari website — nyalakan "Buka website tiap bisnis", kalau tidak hasilnya nol.';
+  } else if (butuhEmail) {
+    el.className = 'form-text text-warning-emphasis';
+    el.innerHTML = '<i class="bi bi-info-circle me-1"></i>Hanya bisnis yang punya website dengan email yang lolos — hasil lebih sedikit tapi siap untuk email.';
+  } else if (mode === 'wa_atau_email') {
+    el.className = 'form-text text-muted';
+    el.innerHTML = 'Bisnis dengan nomor WA atau email lolos. Nomor WA juga dicari di website bisnisnya.';
+  } else {
+    el.className = 'form-text text-muted';
+    el.innerHTML = '';
+  }
+}
+
+function runKomponen() {
+  const targets = kumpulkanTargets();
+  if (!targets.length) { alert('Pilih minimal satu jenis bisnis DAN satu wilayah.'); return; }
+  startJob('/komponen/run', {
+    search_targets: targets,
+    max_results: parseInt(document.getElementById('maxResults').value) || 20,
+    radius_km: parseFloat(document.getElementById('radiusKm').value) || 0,
+    mode_kontak: document.getElementById('modeKontak').value,
+    enrich_website: document.getElementById('enrichWebsite').checked,
+    dedup_enabled: document.getElementById('dedupEnabled').checked,
+    dedup_bulan: parseInt(document.getElementById('dedupBulan').value) || 6,
+    refresh_kontak: true,
+    filter_rating: document.getElementById('filterRating').checked,
+    min_rating: parseFloat(document.getElementById('minRating').value),
+    filter_reviews: document.getElementById('filterReviews').checked,
+    min_reviews: parseInt(document.getElementById('minReviews').value) || 0,
+    listing_konkuren: parseInt(document.getElementById('listingKonkuren').value) || 0,
+    output_format: document.getElementById('outputFormat').value,
+    sertakan_bisnis_tutup: document.getElementById('sertakanTutup').checked,
+    headless: document.getElementById('headlessMode').checked,
+    mode_cepat: false,
+    use_proxy: document.getElementById('useProxy').checked,
+    apify_proxy_token: document.getElementById('apifyToken').value.trim(),
+    apify_proxy_group: document.getElementById('apifyGroup').value,
+    apify_proxy_country: document.getElementById('apifyCountry').value.trim(),
+  });
+}
+
+let runTerputus = null;
+
+async function cekRunTerputus() {
+  try {
+    const d = await (await fetch('/komponen/terputus')).json();
+    if (!d.ada) return;
+    runTerputus = d;
+    document.getElementById('terputusInfo').innerHTML =
+      `Berhenti setelah <strong>${d.target_selesai}</strong> dari <strong>${d.total_target}</strong>
+       target (${escapeHtml(d.mulai_pada || '-')}). <strong>${d.jumlah_lead}</strong> lead sudah aman
+       di database. Sisa <strong>${d.sisa_target}</strong> target.`;
+    document.getElementById('btnLeadsRun').href = '/komponen/leads?run=' + encodeURIComponent(d.run_id);
+    const el = document.getElementById('bannerTerputus');
+    el.classList.remove('d-none'); el.classList.add('d-flex');
+  } catch (e) { /* pelengkap saja */ }
+}
+
+function tutupBannerTerputus() {
+  const el = document.getElementById('bannerTerputus');
+  el.classList.add('d-none'); el.classList.remove('d-flex');
+}
+
+function lanjutkanRun() {
+  if (!runTerputus) return;
+  startJob('/komponen/lanjutkan', {
+    run_id: runTerputus.run_id,
+    apify_proxy_token: document.getElementById('apifyToken').value.trim(),
+  });
+  tutupBannerTerputus();
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  document.querySelectorAll('.target-row').forEach(pasangPicker);
+  hitungEstimasi();
+  infoKontak();
+  cekRunTerputus();
+  // Scraping berjalan di server: kembali ke halaman ini = tersambung lagi ke job-nya.
+  pulihkanJob('komponen');
+});
+</script>
+{% endblock %}

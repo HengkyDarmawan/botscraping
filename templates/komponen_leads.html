@@ -1,0 +1,594 @@
+{% extends "base.html" %}
+{% block title %}Leads Komponen{% endblock %}
+{% block page_title %}<i class="bi bi-cpu text-info me-2"></i>Leads Komponen — PT. Inti Sentosa Bersama{% endblock %}
+
+{% macro qs(hal) -%}
+?{{ dict(args, hal=hal)|urlencode }}
+{%- endmacro %}
+
+{% block content %}
+
+{% if masalah_template %}
+<div class="alert alert-danger">
+  <i class="bi bi-exclamation-octagon me-1"></i><strong>Template dokumen bermasalah:</strong>
+  {{ masalah_template|join('; ') }}
+</div>
+{% endif %}
+
+<div class="row g-3 mb-3">
+  {% for label, nilai, warna, link in [
+      ('Lead Aktif', stats.total, '#0dcaf0', '/komponen/leads'),
+      ('Belum Dihubungi', stats.belum_dihubungi, '#f39c12', '/komponen/leads?status=Belum+Dihubungi'),
+      ('Follow-up Hari Ini', stats.follow_up_hari_ini, '#fd7e14', '/komponen/leads?fu=1&urut=follow_up'),
+      ('Proposal Hari Ini', stats.proposal_hari_ini, '#dc3545', '#')] %}
+  <div class="col-6 col-lg-3">
+    <a href="{{ link }}" class="text-decoration-none text-reset">
+      <div class="stat-card" style="border-left-color: {{ warna }}">
+        <div class="stat-num">{{ nilai }}</div>
+        <div class="stat-label">{{ label }}</div>
+      </div>
+    </a>
+  </div>
+  {% endfor %}
+</div>
+
+<div class="card mb-3">
+  <div class="card-body py-3">
+    <form method="get" class="row g-2 align-items-end" id="formFilter">
+      <div class="col-6 col-md-3">
+        <label class="form-label mb-1">Cari nama / alamat / email</label>
+        <input type="text" name="q" class="form-control form-control-sm" value="{{ f.q or '' }}"
+               placeholder="mis. computer">
+      </div>
+      <div class="col-6 col-md-2">
+        <label class="form-label mb-1">Segmen</label>
+        <select name="segmen" class="form-select form-select-sm">
+          <option value="">Semua</option>
+          {% for s in opsi_segmen %}<option value="{{ s }}" {% if f.segmen == s %}selected{% endif %}>{{ s }}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="col-6 col-md-2">
+        <label class="form-label mb-1">Prioritas</label>
+        <select name="tier" class="form-select form-select-sm">
+          <option value="">Semua</option>
+          {% for t in opsi_tier %}<option value="{{ t }}" {% if f.tier == t %}selected{% endif %}>{{ t }}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="col-6 col-md-2">
+        <label class="form-label mb-1">Kota</label>
+        <select name="kota" class="form-select form-select-sm">
+          <option value="">Semua</option>
+          {% for k in opsi_kota %}<option value="{{ k }}" {% if f.kota == k %}selected{% endif %}>{{ k }}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="col-6 col-md-3">
+        <label class="form-label mb-1">Status</label>
+        <select name="status" class="form-select form-select-sm">
+          <option value="">Semua</option>
+          {% for s in opsi_status %}<option value="{{ s }}" {% if f.status == s %}selected{% endif %}>{{ s }}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="col-6 col-md-2">
+        <label class="form-label mb-1">Area pencarian</label>
+        <select name="area" class="form-select form-select-sm">
+          <option value="">Semua</option>
+          {% for a in opsi_area %}<option value="{{ a }}" {% if f.area_pencarian == a %}selected{% endif %}>{{ a }}</option>{% endfor %}
+        </select>
+      </div>
+      <div class="col-6 col-md-2">
+        <label class="form-label mb-1">Urutkan</label>
+        <select name="urut" class="form-select form-select-sm">
+          {% for v, l in [('skor','Skor prioritas'),('terbaru','Terbaru'),('ulasan','Jumlah ulasan'),('nama','Nama A-Z'),('follow_up','Jadwal follow-up')] %}
+          <option value="{{ v }}" {% if urut == v %}selected{% endif %}>{{ l }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-12 col-md-4 d-flex flex-wrap gap-3 pt-2">
+        {% for nama, label, aktif in [('wa','Punya WA', f.punya_wa), ('email','Punya email', f.punya_email), ('fu','Follow-up jatuh tempo', f.follow_up)] %}
+        <div class="form-check form-switch">
+          <input class="form-check-input" type="checkbox" name="{{ nama }}" value="1" id="f_{{ nama }}" {% if aktif %}checked{% endif %}>
+          <label class="form-check-label small" for="f_{{ nama }}">{{ label }}</label>
+        </div>
+        {% endfor %}
+      </div>
+      {% if f.run %}<input type="hidden" name="run" value="{{ f.run }}">{% endif %}
+      <div class="col-12 col-md-4 d-flex gap-2 justify-content-md-end">
+        <button type="submit" class="btn btn-primary btn-sm"><i class="bi bi-funnel me-1"></i>Terapkan</button>
+        <a href="/komponen/leads" class="btn btn-outline-secondary btn-sm">Reset</a>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header bg-white d-flex flex-wrap gap-2 justify-content-between align-items-center">
+    <span><strong>{{ total }}</strong> lead aktif cocok{% if f.run %} (dari satu run){% endif %}
+      · <span id="jmlPilih">0</span> dipilih</span>
+    <div class="d-flex flex-wrap gap-2">
+      <button class="btn btn-success btn-sm" onclick="bukaExport()">
+        <i class="bi bi-file-earmark-excel me-1"></i>Export (pilih kolom)
+      </button>
+      <button class="btn btn-danger btn-sm" id="btnProposalMassal" onclick="Proposal.massal()" disabled>
+        <i class="bi bi-files me-1"></i>Proposal untuk terpilih (.zip)
+      </button>
+      <button class="btn btn-outline-secondary btn-sm" onclick="Pengaturan.buka()">
+        <i class="bi bi-gear me-1"></i>Pengaturan proposal
+      </button>
+      <button class="btn btn-outline-danger btn-sm" id="btnHapusPilih" onclick="Hapus.terpilih()" disabled>
+        <i class="bi bi-trash me-1"></i>Hapus terpilih
+      </button>
+      <button class="btn btn-outline-danger btn-sm" onclick="Hapus.semua()" {% if not total %}disabled{% endif %}>
+        <i class="bi bi-trash3 me-1"></i><span id="lblHapusSemua">Hapus semua</span>
+      </button>
+    </div>
+  </div>
+  <div class="table-responsive">
+    <table class="table table-sm table-hover align-middle mb-0 table-results">
+      <thead>
+        <tr>
+          <th style="width:28px"><input type="checkbox" class="form-check-input" id="pilihSemua"></th>
+          <th>Skor</th>
+          <th>Bisnis</th>
+          <th>Kontak</th>
+          <th>Online</th>
+          <th style="min-width:180px">Status</th>
+          <th>Aksi</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for l in leads %}
+        <tr data-key="{{ l.place_key }}">
+          <td><input type="checkbox" class="form-check-input pilih-baris"></td>
+          <td class="text-center">
+            <div class="tier-badge tier-{{ l.tier or 'Rendah' }}">{{ l.skor_pembeli or 0 }}</div>
+            <small class="text-muted" style="font-size:.65rem">{{ l.tier or '-' }}</small>
+          </td>
+          <td style="max-width:300px">
+            <div class="fw-semibold">{{ l.nama_bisnis or '-' }}</div>
+            <small class="text-muted d-block">
+              <span class="badge bg-info-subtle text-info-emphasis">{{ l.segmen or 'Lainnya' }}</span>
+              {{ l.kategori or '' }}{% if l.rating %} · ⭐{{ l.rating }}{% if l.jumlah_ulasan is not none %} ({{ l.jumlah_ulasan }}){% endif %}{% endif %}
+            </small>
+            <small class="text-muted d-block text-truncate" style="max-width:300px" title="{{ l.alamat or '' }}">
+              <i class="bi bi-geo-alt"></i> {{ l.kota or l.area_pencarian or '-' }}
+            </small>
+            {% if l.alasan_pitch %}
+            <small class="text-muted d-block text-truncate" style="max-width:300px;font-size:.7rem" title="{{ l.alasan_pitch }}">{{ l.alasan_pitch }}</small>
+            {% endif %}
+          </td>
+          <td style="font-size:.8rem">
+            {% if l.nomor_wa %}
+            <div class="text-nowrap"><a href="{{ l.whatsapp_link }}" target="_blank" class="text-success text-decoration-none">
+              <i class="bi bi-whatsapp"></i> {{ l.nomor_wa }}</a>
+              <i class="bi bi-clipboard text-muted salin" role="button" data-teks="{{ l.nomor_wa }}" title="Salin"></i></div>
+            {% endif %}
+            {% if l.telepon and (not l.nomor_wa or l.telepon[-6:] != l.nomor_wa[-6:]) %}
+            <div class="text-nowrap text-muted"><i class="bi bi-telephone"></i> {{ l.telepon }}</div>
+            {% endif %}
+            {% for e in l.email_semua[:2] %}
+            <div class="text-nowrap"><i class="bi bi-envelope"></i> {{ e }}
+              <i class="bi bi-clipboard text-muted salin" role="button" data-teks="{{ e }}" title="Salin"></i></div>
+            {% endfor %}
+            {% if l.email_semua|length > 2 %}<small class="text-muted">+{{ l.email_semua|length - 2 }} email lain</small>{% endif %}
+            {% if l.whatsapp_lain %}<small class="text-muted d-block" title="Nomor WA lain dari website">WA lain: {{ l.whatsapp_lain }}</small>{% endif %}
+            {% if l.nama_pic %}<small class="d-block"><i class="bi bi-person"></i> {{ l.nama_pic }}</small>{% endif %}
+          </td>
+          <td class="text-nowrap fs-6">
+            {% for kol, ikon, judul in [('website_utama','bi-globe','Website'),('instagram','bi-instagram','Instagram'),
+                                        ('facebook','bi-facebook','Facebook'),('tiktok','bi-tiktok','TikTok'),
+                                        ('tokopedia','bi-bag-check','Tokopedia'),('shopee','bi-bag-heart','Shopee'),
+                                        ('marketplace_lain','bi-shop','Marketplace lain'),('linkedin','bi-linkedin','LinkedIn'),
+                                        ('youtube','bi-youtube','YouTube')] %}
+              {% if l[kol] %}<a href="{{ l[kol] }}" target="_blank" title="{{ judul }}: {{ l[kol] }}" class="me-1"><i class="bi {{ ikon }}"></i></a>{% endif %}
+            {% endfor %}
+          </td>
+          <td>
+            <select class="form-select form-select-sm mb-1 crm" data-field="status">
+              {% for s in opsi_status %}
+              <option value="{{ s }}" {% if (l.status_leads or 'Belum Dihubungi') == s %}selected{% endif %}>{{ s }}</option>
+              {% endfor %}
+            </select>
+            <input type="date" class="form-control form-control-sm mb-1 crm" data-field="tanggal_follow_up"
+                   value="{{ l.tanggal_follow_up or '' }}" title="Jadwal follow-up">
+            <input type="text" class="form-control form-control-sm crm" data-field="catatan"
+                   placeholder="Catatan..." value="{{ l.catatan or '' }}">
+            <small class="text-muted info-kontak" style="font-size:.68rem">
+              {% if l.tanggal_dihubungi %}Dihubungi {{ l.tanggal_dihubungi }}{% if l.kanal_kontak %} ({{ l.kanal_kontak }}){% endif %}{% endif %}
+            </small>
+          </td>
+          <td class="text-nowrap">
+            <button class="btn btn-outline-danger btn-sm mb-1 btn-proposal" title="Buat proposal DOCX + PDF">
+              <i class="bi bi-file-earmark-pdf"></i> Proposal
+            </button>
+            <button class="btn btn-outline-primary btn-sm mb-1 btn-email" title="Template email & WhatsApp siap salin">
+              <i class="bi bi-envelope-paper"></i> Email/WA
+            </button>
+            {% if l.source_url and l.source_url.startswith('http') %}
+            <a href="{{ l.source_url }}" target="_blank" class="btn btn-outline-secondary btn-sm mb-1" title="Buka di Google Maps">
+              <i class="bi bi-geo-alt"></i></a>
+            {% endif %}
+            <button class="btn btn-outline-danger btn-sm mb-1 btn-hapus" title="Hapus lead ini">
+              <i class="bi bi-trash"></i></button>
+            <div class="small text-muted info-proposal" style="font-size:.68rem">
+              {% if l.proposal_nomor %}No. {{ l.proposal_nomor }}{% endif %}
+            </div>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="7" class="text-center text-muted py-5">
+          Belum ada lead komponen yang cocok. Jalankan <a href="/komponen">Scraper Komponen</a> dulu,
+          atau longgarkan filternya.
+        </td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if total_halaman > 1 %}
+  <div class="card-footer bg-white d-flex justify-content-between align-items-center">
+    <a href="{{ qs(halaman - 1) }}" class="btn btn-outline-secondary btn-sm {% if halaman <= 1 %}disabled{% endif %}">
+      <i class="bi bi-chevron-left"></i> Sebelumnya</a>
+    <small class="text-muted">Halaman {{ halaman }} / {{ total_halaman }}</small>
+    <a href="{{ qs(halaman + 1) }}" class="btn btn-outline-secondary btn-sm {% if halaman >= total_halaman %}disabled{% endif %}">
+      Berikutnya <i class="bi bi-chevron-right"></i></a>
+  </div>
+  {% endif %}
+</div>
+
+<!-- Konfirmasi hapus -->
+<div class="modal fade" id="hapusModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header bg-danger text-white">
+        <h5 class="modal-title"><i class="bi bi-trash me-2"></i>Hapus lead</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <p id="hpInfo" class="mb-3"></p>
+        <div class="form-check mb-2">
+          <input class="form-check-input" type="checkbox" id="hpJangan">
+          <label class="form-check-label" for="hpJangan">
+            <strong>Jangan ambil lagi</strong> saat scraping berikutnya
+            <div class="form-text" style="font-size:.75rem">Cocok untuk hasil yang salah (mis. gedung mal,
+              bukan toko). Tanpa centang ini, bisnisnya boleh muncul lagi kalau di-scrape ulang.</div>
+          </label>
+        </div>
+        <div id="hpSemua" class="d-none">
+          <div class="form-check mb-3">
+            <input class="form-check-input" type="checkbox" id="hpLewati">
+            <label class="form-check-label" for="hpLewati">
+              Kosongkan juga daftar bisnis yang dilewati
+              <div class="form-text" style="font-size:.75rem">Bisnis tutup / tanpa kontak yang dulu disaring
+                akan dicek ulang di scraping berikutnya (reset total).</div>
+            </label>
+          </div>
+          <label class="form-label mb-1" for="hpKonfirmasi">Ketik <code>HAPUS</code> untuk konfirmasi</label>
+          <input class="form-control" id="hpKonfirmasi" autocomplete="off">
+        </div>
+        <div class="form-text mt-2" style="font-size:.75rem">
+          Nomor surat &amp; file proposal yang sudah dibuat tidak ikut terhapus, supaya nomornya tidak dipakai ulang.
+        </div>
+        <div id="hpGalat" class="text-danger small mt-2"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline-secondary" data-bs-dismiss="modal">Batal</button>
+        <button class="btn btn-danger" id="hpJalan"><i class="bi bi-trash me-1"></i>Hapus</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Hasil proposal -->
+<div class="modal fade" id="proposalModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header bg-danger text-white">
+        <h5 class="modal-title"><i class="bi bi-file-earmark-pdf me-2"></i>Proposal</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body" id="proposalBody"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Pengaturan proposal -->
+<div class="modal fade" id="pengaturanModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="bi bi-gear me-2"></i>Pengaturan Proposal & Follow-up</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="mb-2">
+          <label class="form-label mb-1">Jabatan penanda tangan</label>
+          <input class="form-control form-control-sm" id="atJabatan">
+        </div>
+        <div class="mb-2">
+          <label class="form-label mb-1">Janji waktu kirim quotation</label>
+          <input class="form-control form-control-sm" id="atSla">
+        </div>
+        <div class="mb-2">
+          <label class="form-label mb-1">Kota surat</label>
+          <input class="form-control form-control-sm" id="atKota">
+        </div>
+        <div class="mb-2">
+          <label class="form-label mb-1">Pola nomor surat</label>
+          <input class="form-control form-control-sm font-monospace" id="atPola">
+          <div class="form-text" style="font-size:.72rem">
+            <code>{urut:03d}</code> nomor urut harian (reset tiap hari) · <code>{hari:02d}</code>
+            · <code>{bulan:02d}</code> · <code>{romawi}</code> bulan romawi · <code>{tahun}</code>
+            <br>Contoh hari ini: <strong id="atContoh"></strong>
+          </div>
+        </div>
+        <div class="row g-2">
+          <div class="col-6">
+            <label class="form-label mb-1">Follow-up 1 (hari setelah kirim)</label>
+            <input type="number" min="1" class="form-control form-control-sm" id="atFu1">
+          </div>
+          <div class="col-6">
+            <label class="form-label mb-1">Follow-up 2 (hari setelah kirim)</label>
+            <input type="number" min="1" class="form-control form-control-sm" id="atFu2">
+          </div>
+        </div>
+        <div class="mt-3">
+          <label class="form-label mb-1" for="atKategori">Kategori Google Maps yang dilewati saat scraping</label>
+          <textarea class="form-control form-control-sm" id="atKategori" rows="3"></textarea>
+          <div class="form-text" style="font-size:.72rem">Pisahkan dengan koma. Bisnis yang namanya jelas
+            toko komputer/CCTV/warnet tetap diambil walau kategorinya cocok.</div>
+        </div>
+        <div id="atGalat" class="text-danger small mt-2"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-primary" onclick="Pengaturan.simpan()">Simpan</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="/static/js/export-picker.js"></script>
+<script src="/static/js/email-popup.js"></script>
+<script>
+const FILTER_AKTIF = {{ args|tojson }};
+
+function barisDari(el) { return el.closest('tr[data-key]'); }
+
+// ─── CRM inline ─────────────────────────────────────────────────────────────
+document.querySelectorAll('.crm').forEach(el => el.addEventListener('change', async () => {
+  const tr = barisDari(el);
+  const body = { place_key: tr.dataset.key };
+  body[el.dataset.field] = el.value;
+  el.classList.add('border-warning');
+  try {
+    const d = await (await fetch('/komponen/status', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+    })).json();
+    el.classList.remove('border-warning');
+    el.classList.add(d.ok ? 'border-success' : 'border-danger');
+    if (d.ok) perbaruiBaris(tr.dataset.key, d);
+    setTimeout(() => el.classList.remove('border-success', 'border-danger'), 1200);
+  } catch (e) {
+    el.classList.remove('border-warning'); el.classList.add('border-danger');
+  }
+}));
+
+/** Status/jadwal baru dari server (termasuk follow-up otomatis) → tampilkan di baris. */
+function perbaruiBaris(key, d) {
+  const tr = document.querySelector(`tr[data-key="${CSS.escape(key)}"]`);
+  if (!tr) return;
+  if (d.status) tr.querySelector('[data-field="status"]').value = d.status;
+  if (d.tanggal_follow_up !== undefined) tr.querySelector('[data-field="tanggal_follow_up"]').value = d.tanggal_follow_up || '';
+  if (d.tanggal_dihubungi) tr.querySelector('.info-kontak').textContent = 'Dihubungi ' + d.tanggal_dihubungi;
+}
+
+document.querySelectorAll('.salin').forEach(el => el.addEventListener('click', () => EmailPopup.salin(el.dataset.teks, null)
+  .then(() => { el.classList.replace('bi-clipboard', 'bi-check2'); setTimeout(() => el.classList.replace('bi-check2', 'bi-clipboard'), 1200); })));
+
+document.querySelectorAll('.btn-email').forEach(b => b.addEventListener('click', () =>
+  EmailPopup.buka(barisDari(b).dataset.key, perbaruiBaris)));
+
+// ─── Pilih baris ────────────────────────────────────────────────────────────
+function kunciTerpilih() {
+  return [...document.querySelectorAll('.pilih-baris:checked')].map(c => barisDari(c).dataset.key);
+}
+function hitungPilih() {
+  const n = kunciTerpilih().length;
+  document.getElementById('jmlPilih').textContent = n;
+  document.getElementById('btnProposalMassal').disabled = !n;
+  const bh = document.getElementById('btnHapusPilih');
+  bh.disabled = !n;
+  bh.innerHTML = `<i class="bi bi-trash me-1"></i>Hapus terpilih${n ? ' (' + n + ')' : ''}`;
+}
+document.getElementById('pilihSemua').addEventListener('change', e => {
+  document.querySelectorAll('.pilih-baris').forEach(c => c.checked = e.target.checked);
+  hitungPilih();
+});
+document.querySelectorAll('.pilih-baris').forEach(c => c.addEventListener('change', hitungPilih));
+
+// ─── Export ─────────────────────────────────────────────────────────────────
+function bukaExport() {
+  const keys = kunciTerpilih();
+  ExportPicker.buka({
+    kunci: 'komponen',
+    katalogUrl: '/komponen/export/kolom',
+    exportUrl: '/komponen/export',
+    payload: () => keys.length ? { keys } : { filter: FILTER_AKTIF, urut: FILTER_AKTIF.urut || 'skor' },
+    info: () => keys.length
+      ? `<i class="bi bi-check2-square me-1"></i>Mengekspor <strong>${keys.length}</strong> baris yang dicentang.`
+      : `<i class="bi bi-funnel me-1"></i>Mengekspor <strong>semua {{ total }}</strong> lead yang cocok dengan filter aktif (bukan hanya halaman ini). Centang baris untuk mengekspor sebagian saja. Lead berstatus "Jangan Hubungi" tidak ikut.`,
+  });
+}
+
+// ─── Proposal ───────────────────────────────────────────────────────────────
+const Proposal = (() => {
+  let modal = null;
+  function tampil(html) {
+    document.getElementById('proposalBody').innerHTML = html;
+    modal = modal || new bootstrap.Modal(document.getElementById('proposalModal'));
+    modal.show();
+  }
+  async function buat(key, baru = false) {
+    const tr = document.querySelector(`tr[data-key="${CSS.escape(key)}"]`);
+    const btn = tr ? tr.querySelector('.btn-proposal') : null;
+    if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>'; }
+    try {
+      const d = await (await fetch('/komponen/proposal', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ place_key: key, baru })
+      })).json();
+      if (!d.ok) { tampil(`<p class="text-danger mb-0">${escapeHtml(d.error)}</p>`); return d; }
+      if (tr) {
+        tr.querySelector('.info-proposal').textContent = 'No. ' + d.nomor;
+        const st = tr.querySelector('[data-field="status"]');
+        if (st.value === 'Belum Dihubungi') st.value = 'Proposal Dibuat';
+      }
+      tampil(`
+        <p class="mb-2">Nomor surat: <strong>${escapeHtml(d.nomor)}</strong></p>
+        ${d.peringatan ? `<div class="alert alert-warning py-2 small">${escapeHtml(d.peringatan)}</div>` : ''}
+        <div class="d-flex flex-wrap gap-2">
+          ${d.pdf ? `<a class="btn btn-danger" href="${d.pdf}"><i class="bi bi-file-earmark-pdf me-1"></i>Download PDF</a>
+                     <a class="btn btn-outline-danger" href="${d.pdf}?lihat=1" target="_blank"><i class="bi bi-eye me-1"></i>Lihat</a>` : ''}
+          <a class="btn btn-outline-primary" href="${d.docx}"><i class="bi bi-file-earmark-word me-1"></i>DOCX</a>
+          <button class="btn btn-outline-secondary" onclick="EmailPopup.buka('${escapeHtml(key)}', perbaruiBaris)">
+            <i class="bi bi-envelope-paper me-1"></i>Lanjut ke email</button>
+        </div>
+        <hr>
+        <small class="text-muted">Membuat ulang di hari yang sama memakai nomor yang sama.
+          <a href="#" onclick="Proposal.buat('${escapeHtml(key)}', true); return false;">Buat dengan nomor baru</a></small>`);
+      return d;
+    } finally {
+      if (btn) { btn.disabled = false; btn.innerHTML = '<i class="bi bi-file-earmark-pdf"></i> Proposal'; }
+    }
+  }
+  async function massal() {
+    const keys = kunciTerpilih();
+    if (!keys.length) return;
+    const btn = document.getElementById('btnProposalMassal');
+    btn.disabled = true;
+    btn.innerHTML = `<span class="spinner-border spinner-border-sm me-1"></span>Membuat ${keys.length} proposal...`;
+    try {
+      const d = await (await fetch('/komponen/proposal-massal', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ keys })
+      })).json();
+      if (!d.ok) { tampil(`<p class="text-danger mb-0">${escapeHtml(d.error)}</p>`); return; }
+      tampil(`<p><strong>${d.jumlah}</strong> proposal dibuat.</p>
+        ${d.peringatan ? `<div class="alert alert-warning py-2 small">${escapeHtml(d.peringatan)}</div>` : ''}
+        ${d.gagal.length ? `<div class="alert alert-danger py-2 small">${d.gagal.map(escapeHtml).join('<br>')}</div>` : ''}
+        <a class="btn btn-danger" href="${d.zip}"><i class="bi bi-file-zip me-1"></i>Download ZIP</a>
+        <p class="small text-muted mt-2 mb-0">Muat ulang halaman untuk melihat nomor surat di tiap baris.</p>`);
+    } finally {
+      btn.innerHTML = '<i class="bi bi-files me-1"></i>Proposal untuk terpilih (.zip)';
+      hitungPilih();
+    }
+  }
+  document.querySelectorAll('.btn-proposal').forEach(b => b.addEventListener('click', () => buat(barisDari(b).dataset.key)));
+  return { buat, massal };
+})();
+
+// ─── Hapus ──────────────────────────────────────────────────────────────────
+const Hapus = (() => {
+  const TOTAL = {{ total }};
+  // Filter aktif = parameter apa pun selain urutan. Tanpa filter, "hapus semua"
+  // benar-benar menghapus seluruh lead komponen.
+  const adaFilter = Object.keys(FILTER_AKTIF).some(k => k !== 'urut' && FILTER_AKTIF[k]);
+  if (adaFilter) document.getElementById('lblHapusSemua').textContent = `Hapus ${TOTAL} lead sesuai filter`;
+  let modal = null, mode = null, keys = [];
+
+  function buka(m, k, info) {
+    mode = m; keys = k;
+    document.getElementById('hpInfo').innerHTML = info;
+    document.getElementById('hpJangan').checked = m !== 'semua';
+    document.getElementById('hpSemua').classList.toggle('d-none', m !== 'semua');
+    document.getElementById('hpLewati').checked = false;
+    document.getElementById('hpKonfirmasi').value = '';
+    document.getElementById('hpGalat').textContent = '';
+    modal = modal || new bootstrap.Modal(document.getElementById('hapusModal'));
+    modal.show();
+  }
+
+  function satu(key) {
+    const nama = document.querySelector(`tr[data-key="${CSS.escape(key)}"] .fw-semibold`).textContent.trim();
+    buka('keys', [key], `Hapus <strong>${escapeHtml(nama)}</strong> dari Leads Komponen?`);
+  }
+  function terpilih() {
+    const k = kunciTerpilih();
+    if (k.length) buka('keys', k, `Hapus <strong>${k.length}</strong> lead yang dicentang?`);
+  }
+  function semua() {
+    buka('semua', [], adaFilter
+      ? `Hapus <strong>semua ${TOTAL} lead</strong> yang cocok dengan filter aktif (bukan hanya halaman ini)?`
+      : `Hapus <strong>SELURUH ${TOTAL} lead komponen</strong>? Database komponen akan kosong.`);
+  }
+
+  async function jalankan() {
+    const btn = document.getElementById('hpJalan');
+    const galat = document.getElementById('hpGalat');
+    const body = { jangan_ambil_lagi: document.getElementById('hpJangan').checked };
+    if (mode === 'semua') {
+      body.filter = FILTER_AKTIF;
+      body.konfirmasi = document.getElementById('hpKonfirmasi').value;
+      body.kosongkan_lewati = document.getElementById('hpLewati').checked;
+      if (body.konfirmasi.trim().toUpperCase() !== 'HAPUS') { galat.textContent = 'Ketik HAPUS untuk konfirmasi.'; return; }
+    } else {
+      body.keys = keys;
+    }
+    btn.disabled = true;
+    try {
+      const d = await (await fetch('/komponen/hapus', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+      })).json();
+      if (!d.ok) { galat.textContent = d.error || 'Gagal menghapus.'; return; }
+      if (mode === 'semua') { window.location = '/komponen/leads'; return; }
+      keys.forEach(k => document.querySelector(`tr[data-key="${CSS.escape(k)}"]`)?.remove());
+      document.getElementById('pilihSemua').checked = false;
+      hitungPilih();
+      modal.hide();
+      if (!document.querySelector('tr[data-key]')) window.location.reload();
+    } catch (e) {
+      galat.textContent = 'Tidak bisa menghubungi server.';
+    } finally {
+      btn.disabled = false;
+    }
+  }
+  document.getElementById('hpJalan').addEventListener('click', jalankan);
+  document.querySelectorAll('.btn-hapus').forEach(b => b.addEventListener('click', () => satu(barisDari(b).dataset.key)));
+  return { terpilih, semua };
+})();
+
+// ─── Pengaturan ─────────────────────────────────────────────────────────────
+const Pengaturan = (() => {
+  const PETA = { atJabatan: 'jabatan', atSla: 'sla', atKota: 'kota_surat', atPola: 'pola_nomor', atFu1: 'fu1_hari', atFu2: 'fu2_hari', atKategori: 'kategori_dikecualikan' };
+  let modal = null;
+  async function buka() {
+    const d = await (await fetch('/komponen/pengaturan')).json();
+    Object.entries(PETA).forEach(([id, k]) => document.getElementById(id).value = d[k] || '');
+    document.getElementById('atGalat').textContent = '';
+    contoh();
+    modal = modal || new bootstrap.Modal(document.getElementById('pengaturanModal'));
+    modal.show();
+  }
+  function contoh() {
+    const pola = document.getElementById('atPola').value;
+    const t = new Date(), rom = ['I','II','III','IV','V','VI','VII','VIII','IX','X','XI','XII'][t.getMonth()];
+    const pad = (n, w) => String(n).padStart(w, '0');
+    document.getElementById('atContoh').textContent = pola
+      .replace(/\{urut(:0?(\d)d)?\}/, (_, a, w) => pad(1, +(w || 1)))
+      .replace(/\{hari(:0?(\d)d)?\}/, (_, a, w) => pad(t.getDate(), +(w || 1)))
+      .replace(/\{bulan(:0?(\d)d)?\}/, (_, a, w) => pad(t.getMonth() + 1, +(w || 1)))
+      .replace('{romawi}', rom).replace('{tahun}', t.getFullYear());
+  }
+  document.getElementById('atPola').addEventListener('input', contoh);
+  async function simpan() {
+    const body = {};
+    Object.entries(PETA).forEach(([id, k]) => body[k] = document.getElementById(id).value);
+    const d = await (await fetch('/komponen/pengaturan', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+    })).json();
+    if (!d.ok) { document.getElementById('atGalat').textContent = d.error; return; }
+    modal.hide();
+  }
+  return { buka, simpan };
+})();
+</script>
+{% endblock %}

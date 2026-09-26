@@ -1,0 +1,93 @@
+{
+  "_catatan": "Pustaka jenis bisnis calon pembeli komponen & perangkat komputer (PT. Inti Sentosa Bersama). k = kata kunci yang dikirim ke Google Maps, alasan = apa yang biasanya mereka beli. Nama sektor sengaja sama dengan nama segmen di scrapers/komponen.py supaya skor & segmen lead sejalan dengan pilihan di sini.",
+  "sektor": [
+    {
+      "nama": "Reseller & Toko Komputer",
+      "alasan": "Membeli rutin untuk dijual kembali: volume paling besar dan paling sering order ulang. Harga reseller adalah daya tarik utamanya.",
+      "keywords": [
+        {"k": "Toko Komputer", "alasan": "stok komponen, laptop, dan aksesoris untuk dijual kembali"},
+        {"k": "Toko Laptop", "alasan": "restock laptop & aksesoris, sering butuh unit cepat"},
+        {"k": "Service Komputer", "alasan": "butuh sparepart (SSD, RAM, PSU, keyboard) hampir setiap hari"},
+        {"k": "Service Laptop", "alasan": "sparepart laptop: SSD, RAM, baterai, charger, LCD"},
+        {"k": "Toko Aksesoris Komputer", "alasan": "mouse, keyboard, headset, kabel, flashdisk dalam jumlah besar"},
+        {"k": "Toko Printer", "alasan": "printer, tinta, dan sparepart printer untuk dijual kembali"},
+        {"k": "Toko Elektronik", "alasan": "sebagian menjual laptop, monitor, dan aksesoris komputer"},
+        {"k": "Jual Beli Laptop Bekas", "alasan": "butuh komponen upgrade (SSD, RAM) sebelum unit dijual"},
+        {"k": "Toko Gaming Gear", "alasan": "VGA, monitor gaming, periferal gaming"}
+      ]
+    },
+    {
+      "nama": "IT, Jaringan & CCTV",
+      "alasan": "Membeli atas nama proyek klien mereka: perangkat jaringan, server, PC kantor. Nilai per proyek besar.",
+      "keywords": [
+        {"k": "Konsultan IT", "alasan": "pengadaan PC, server, dan jaringan untuk proyek klien"},
+        {"k": "Jasa Instalasi Jaringan", "alasan": "router, switch, access point, kabel LAN"},
+        {"k": "Instalasi CCTV", "alasan": "HDD surveillance, NVR/DVR, PC monitoring, switch PoE"},
+        {"k": "Software House", "alasan": "laptop & PC developer, monitor tambahan, server"},
+        {"k": "Internet Service Provider", "alasan": "perangkat jaringan dan server dalam jumlah besar"},
+        {"k": "System Integrator", "alasan": "pengadaan perangkat untuk proyek instansi & perusahaan"}
+      ]
+    },
+    {
+      "nama": "Warnet & Game Center",
+      "alasan": "Upgrade berkala seluruh unit sekaligus: VGA, RAM, SSD, monitor. Satu order bisa 10-40 unit.",
+      "keywords": [
+        {"k": "Warnet", "alasan": "rakitan PC gaming dan upgrade VGA untuk banyak unit"},
+        {"k": "Game Center", "alasan": "PC gaming, monitor refresh tinggi, periferal"},
+        {"k": "Esports Arena", "alasan": "PC high-end dan periferal gaming"},
+        {"k": "Internet Cafe", "alasan": "PC & perangkat jaringan"}
+      ]
+    },
+    {
+      "nama": "Pendidikan & Kursus",
+      "alasan": "Lab komputer diperbarui per tahun ajaran, sering dengan anggaran BOS/yayasan. Order besar tapi musiman.",
+      "keywords": [
+        {"k": "SMK", "alasan": "lab TKJ/RPL butuh PC, perangkat jaringan, dan komponen praktik"},
+        {"k": "Sekolah Swasta", "alasan": "lab komputer, laptop guru, printer, proyektor"},
+        {"k": "Universitas", "alasan": "lab komputer dan perangkat kantor dalam jumlah besar"},
+        {"k": "Kursus Komputer", "alasan": "PC untuk kelas, sering upgrade berkala"},
+        {"k": "Lembaga Pelatihan", "alasan": "laptop & PC untuk peserta pelatihan"},
+        {"k": "Bimbingan Belajar", "alasan": "PC admin, printer, laptop pengajar"},
+        {"k": "Pondok Pesantren", "alasan": "lab komputer dan perangkat administrasi"}
+      ]
+    },
+    {
+      "nama": "Kantor & Perusahaan",
+      "alasan": "Membeli PC, laptop, printer, dan jaringan untuk operasional; cocok untuk kerja sama pembayaran tempo.",
+      "keywords": [
+        {"k": "Perusahaan Logistik", "alasan": "PC gudang, printer label, perangkat jaringan"},
+        {"k": "Ekspedisi", "alasan": "PC kasir/admin, printer resi, barcode scanner"},
+        {"k": "Kantor Notaris", "alasan": "PC, printer, scanner dokumen"},
+        {"k": "Kantor Akuntan", "alasan": "PC dan laptop staf, printer, storage"},
+        {"k": "Kawasan Industri", "alasan": "pabrik dan perkantoran dengan kebutuhan IT besar"},
+        {"k": "Distributor", "alasan": "PC admin & gudang, printer, jaringan"},
+        {"k": "Kantor Pusat", "alasan": "pengadaan perangkat kantor dalam jumlah besar"},
+        {"k": "Coworking Space", "alasan": "jaringan, monitor, dan perangkat bersama"}
+      ]
+    },
+    {
+      "nama": "Percetakan & Kreatif",
+      "alasan": "Butuh PC spesifikasi tinggi untuk desain/editing, monitor akurat warna, dan printer.",
+      "keywords": [
+        {"k": "Digital Printing", "alasan": "PC desain spesifikasi tinggi, monitor, storage"},
+        {"k": "Percetakan", "alasan": "PC desain, printer, perangkat jaringan"},
+        {"k": "Fotokopi", "alasan": "PC, printer, dan scanner untuk layanan pelanggan"},
+        {"k": "Studio Foto", "alasan": "PC editing, monitor, storage besar"},
+        {"k": "Rumah Produksi", "alasan": "workstation editing video, VGA, storage"},
+        {"k": "Jasa Desain Grafis", "alasan": "PC/laptop desain, monitor, pen tablet"}
+      ]
+    },
+    {
+      "nama": "Kesehatan, Hotel & Ritel",
+      "alasan": "PC kasir/front office, printer, dan jaringan; biasanya lewat bagian pengadaan.",
+      "keywords": [
+        {"k": "Klinik", "alasan": "PC rekam medis, printer, jaringan"},
+        {"k": "Rumah Sakit", "alasan": "pengadaan PC dan perangkat jaringan dalam jumlah besar"},
+        {"k": "Apotek", "alasan": "PC kasir, printer struk, barcode scanner"},
+        {"k": "Laboratorium Klinik", "alasan": "PC dan printer hasil lab"},
+        {"k": "Hotel", "alasan": "PC front office, jaringan, CCTV"},
+        {"k": "Minimarket", "alasan": "PC kasir/POS, printer struk"}
+      ]
+    }
+  ]
+}
