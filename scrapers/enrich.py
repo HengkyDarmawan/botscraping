@@ -42,10 +42,25 @@ HASIL_KOSONG = {
     "web_ada_toko": None,
     "web_final_url": "",
     "email": "",
+    # Semua email valid selain `email` (yang terbaik), dipisah "; ".
+    "email_lain": "",
     "instagram": "",
     "facebook": "",
     "tiktok": "",
+    "tokopedia": "",
+    "shopee": "",
+    "marketplace_lain": "",
+    "linkedin": "",
+    "youtube": "",
+    # Nomor dari tautan wa.me / api.whatsapp.com di website, digit saja, "; ".
+    "whatsapp_web": "",
 }
+
+# Field kontak/tautan yang dipanen dari website. Nilai kosong hasil pemeriksaan
+# TIDAK boleh menimpa nilai yang sudah ada di row (mis. dari Google Maps).
+FIELD_TAUTAN = ("email", "email_lain", "instagram", "facebook", "tiktok",
+                "tokopedia", "shopee", "marketplace_lain", "linkedin", "youtube",
+                "whatsapp_web")
 
 # Website yang sebenarnya cuma tautan ke sosmed/marketplace/link-in-bio.
 # Untuk penilaian, ini dihitung SAMA DENGAN belum punya website: bisnisnya sudah
@@ -70,6 +85,11 @@ PLATFORM_GRATISAN = {
     "Weebly", "Webnode", "sosmed_saja", "marketplace",
 }
 
+# Tautan WhatsApp yang memuat nomor: wa.me/62812..., api.whatsapp.com/send?phone=...
+_RE_WA_TAUTAN = re.compile(
+    r"(?:wa\.me/|whatsapp\.com/send/?\?(?:[^\s\"'<>]*&)?phone=|whatsapp://send/?\?phone=)"
+    r"\+?(\d{9,15})", re.I)
+
 _RE_EMAIL = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
 _RE_PENANDA_HAKCIPTA = re.compile(r"(?:©|&copy;|copyright)", re.I)
 _RE_TAHUN = re.compile(r"(20\d{2})")
@@ -80,7 +100,14 @@ _EMAIL_SAMPAH = (
     "sentry.io", "wixpress.com", "@2x", ".png", ".jpg", ".jpeg", ".gif",
     ".webp", ".svg", "core-js", "polyfill", "@sentry", "godaddy.com",
     "namecheap", "sample@", "user@", "nama@", "info@example",
+    "noreply", "no-reply", "donotreply", "mailer-daemon", "privacy@",
+    "abuse@", "webmaster@", "wordpress@",
 )
+
+# Awalan kotak surat yang paling mungkin dibaca orang yang memutuskan pembelian.
+_EMAIL_PRIORITAS = ("purchasing", "procurement", "pengadaan", "sales", "marketing",
+                    "info", "admin", "cs", "halo", "hello", "contact", "kontak",
+                    "office")
 
 _JEJAK_PIXEL = (
     "googletagmanager.com", "google-analytics.com", "gtag(", "gtm.js",
@@ -154,7 +181,11 @@ def _deteksi_platform(host, html, headers):
 def _bersihkan_email(kandidat):
     hasil = []
     for e in kandidat:
-        e = e.strip().strip(".,;:").lower()
+        # Tautan mailto: sering di-encode ("mailto:%20nama@x.com") — tanpa
+        # unquote, "%20" ikut tersimpan sebagai bagian alamat email.
+        e = urllib.parse.unquote(str(e or "")).strip().strip(".,;:<>()[]\"'").lower()
+        m = _RE_EMAIL.search(e)
+        e = m.group() if m else ""
         if not e or len(e) > 80:
             continue
         if any(s in e for s in _EMAIL_SAMPAH):
@@ -164,14 +195,107 @@ def _bersihkan_email(kandidat):
     return hasil
 
 
+def urut_email(daftar, website=""):
+    """
+    Urutkan email dari yang paling layak dihubungi.
+
+    Email ber-domain sama dengan website bisnis didahulukan (itu kotak surat
+    resmi), lalu awalan yang biasa dibaca bagian pembelian/penjualan. Urutan asli
+    dipertahankan sebagai penentu terakhir.
+    """
+    w = str(website or "")
+    host = urllib.parse.urlparse(w if "://" in w else f"https://{w}").netloc
+    host = host.lower().split(":")[0]
+    if host.startswith("www."):
+        host = host[4:]
+
+    def bobot(pasangan):
+        i, e = pasangan
+        lokal, _, domain = e.partition("@")
+        skor = 0
+        if host and (domain == host or domain.endswith("." + host)
+                     or host.endswith("." + domain)):
+            skor -= 100
+        for n, awalan in enumerate(_EMAIL_PRIORITAS):
+            if lokal == awalan or lokal.startswith(awalan):
+                skor -= 50 - n
+                break
+        return (skor, i)
+
+    return [e for _, e in sorted(enumerate(daftar), key=bobot)]
+
+
+def klasifikasi_tautan(url):
+    """
+    Kolom yang tepat untuk sebuah URL: "instagram", "facebook", "tiktok",
+    "tokopedia", "shopee", "marketplace_lain", "linkedin", "youtube",
+    "whatsapp", "linkinbio", "sosmed_lain", atau "" bila itu website sungguhan.
+
+    Google Maps sering mencantumkan akun Instagram atau toko Tokopedia di kolom
+    "Situs Web"; tanpa ini tautan itu tercatat sebagai website dan kolom
+    Instagram/Tokopedia-nya kosong.
+    """
+    u = str(url or "").strip()
+    if not u or u.lower() in ("-", "n/a", "none"):
+        return ""
+    if not u.lower().startswith(("http://", "https://")):
+        u = "https://" + u
+    host = urllib.parse.urlparse(u).netloc
+    for jenis, daftar in (
+        ("instagram", ("instagram.com", "instagr.am")),
+        ("facebook", ("facebook.com", "fb.com", "fb.me")),
+        ("tiktok", ("tiktok.com",)),
+        ("tokopedia", ("tokopedia.com", "tokopedia.link")),
+        ("shopee", ("shopee.co.id", "shopee.com", "shp.ee")),
+        ("marketplace_lain", ("bukalapak.com", "lazada.co.id", "blibli.com",
+                              "zalora.co.id", "jd.id")),
+        ("linkedin", ("linkedin.com",)),
+        ("youtube", ("youtube.com", "youtu.be")),
+        ("whatsapp", ("wa.me", "wa.link", "whatsapp.com")),
+        ("linkinbio", ("linktr.ee", "lynk.id", "linkin.bio", "bio.link",
+                       "heylink.me", "solo.to", "campsite.bio", "msha.ke",
+                       "taplink.cc", "beacons.ai")),
+    ):
+        if _host_cocok(host, daftar):
+            return jenis
+    if _host_cocok(host, _HOST_SOSMED + _HOST_MARKETPLACE):
+        return "sosmed_lain"
+    return ""
+
+
+def _nomor_wa_dari_html(html):
+    """Nomor WhatsApp (digit, awalan 62) dari tautan wa.me di halaman."""
+    hasil = []
+    for m in _RE_WA_TAUTAN.finditer(urllib.parse.unquote(html or "")):
+        d = m.group(1)
+        if d.startswith("0"):
+            d = "62" + d[1:]
+        elif d.startswith("8"):
+            d = "62" + d
+        if d.startswith("628") and 10 <= len(d) <= 15 and d not in hasil:
+            hasil.append(d)
+    return hasil
+
+
 def _ambil_sosmed(soup, base_url):
-    ditemukan = {"instagram": "", "facebook": "", "tiktok": ""}
+    ditemukan = {"instagram": "", "facebook": "", "tiktok": "", "tokopedia": "",
+                 "shopee": "", "marketplace_lain": "", "linkedin": "", "youtube": ""}
     for a in soup.find_all("a", href=True):
         href = urllib.parse.urljoin(base_url, a["href"])
         low = href.lower()
         # Tautan "bagikan ke ..." bukan akun milik bisnis.
         if any(s in low for s in ("sharer", "share.php", "/share?", "intent/",
-                                  "developers.", "business.facebook.com")):
+                                  "developers.", "business.facebook.com",
+                                  "sharearticle", "/embed/", "/watch?")):
+            continue
+        jenis = klasifikasi_tautan(href)
+        if jenis in ("tokopedia", "shopee", "marketplace_lain", "linkedin", "youtube"):
+            if not ditemukan[jenis]:
+                jalur = urllib.parse.urlparse(href).path.strip("/")
+                # Beranda/halaman bantuan platform bukan akun milik bisnis.
+                if jalur and not jalur.lower().startswith(
+                        ("help", "about", "search", "legal", "policy", "privacy")):
+                    ditemukan[jenis] = href.split("?")[0]
             continue
         if not ditemukan["instagram"] and "instagram.com/" in low:
             jalur = low.split("instagram.com/", 1)[1].strip("/")
@@ -292,6 +416,7 @@ def periksa_website(url, timeout=TIMEOUT):
     teks = soup.get_text(" ", strip=True)
     hasil["web_tahun_update"] = _tahun_terakhir(teks)
     hasil.update(_ambil_sosmed(soup, final_url))
+    nomor_wa = _nomor_wa_dari_html(html)
 
     # Email: mailto: paling dipercaya, baru regex di seluruh halaman.
     kandidat = [a["href"].split("mailto:", 1)[1].split("?")[0]
@@ -321,14 +446,19 @@ def periksa_website(url, timeout=TIMEOUT):
                       if x["href"].lower().startswith("mailto:")]
                 k2 += _RE_EMAIL.findall(s2.get_text(" ", strip=True))
                 bersih = _bersihkan_email(k2)
-                if not hasil["instagram"]:
-                    hasil.update({k: v for k, v in _ambil_sosmed(s2, tujuan).items() if v})
+                hasil.update({k: v for k, v in _ambil_sosmed(s2, tujuan).items()
+                              if v and not hasil.get(k)})
+                nomor_wa += [n for n in _nomor_wa_dari_html(r2.text or "")
+                             if n not in nomor_wa]
                 if bersih:
                     break
             except Exception:
                 continue
 
+    bersih = urut_email(bersih, final_url)
     hasil["email"] = bersih[0] if bersih else ""
+    hasil["email_lain"] = "; ".join(bersih[1:6])
+    hasil["whatsapp_web"] = "; ".join(nomor_wa[:3])
     return hasil
 
 
@@ -377,7 +507,7 @@ async def enrich_banyak(rows, konkuren=5, cb=None, should_stop=None,
                     cb(None, f"⚠ Gagal cek website {row.get(field_url)}: {e}", None)
             # Email/sosmed dari GMaps (bila ada) tidak ditimpa nilai kosong.
             for k, v in list(hasil.items()):
-                if k in ("email", "instagram", "facebook", "tiktok") and not v:
+                if k in FIELD_TAUTAN and not v:
                     hasil[k] = row.get(k) or ""
             row.update(hasil)
             selesai += 1

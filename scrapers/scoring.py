@@ -144,6 +144,16 @@ def link_wa(phone_raw, pesan=""):
     return tautan
 
 
+def bisnis_tutup(status_buka):
+    """
+    True bila status Google Maps menyatakan bisnis tutup — permanen ATAU
+    sementara. Dulu hanya "permanen"/"closed" yang dicek, sehingga "Tutup
+    Sementara" dibuang dari Excel oleh filter tetapi tetap diberi skor tinggi.
+    """
+    st = str(status_buka or "").lower()
+    return any(k in st for k in ("permanen", "sementara", "closed"))
+
+
 # ─── Normalisasi sinyal ───────────────────────────────────────────────────────
 
 def _angka(v, default=0.0):
@@ -228,7 +238,10 @@ def sinyal(row):
         "toko_online": _tri(row.get("web_ada_toko")),
 
         "telepon": str(row.get("telepon") or "").strip(),
-        "wa": nomor_wa_valid(row.get("telepon")),
+        # WA dari website (kontak.rapikan_kontak) juga dihitung, bukan hanya
+        # telepon Google Maps yang kebetulan nomor seluler.
+        "wa": nomor_wa_valid(row.get("telepon"))
+              or bool(str(row.get("whatsapp_link") or "").strip()),
         "email": str(row.get("email") or "").strip(),
         "ig": str(row.get("instagram") or "").strip(),
         "fb": str(row.get("facebook") or "").strip(),
@@ -397,8 +410,7 @@ def rekomendasi_jasa(row):
 
     # Diperiksa di luar mekanisme bobot: bisnis yang sudah tutup tidak boleh
     # sempat diberi label jasa apa pun, setinggi apa pun bobotnya.
-    if ("permanen" in s["status_buka"].lower()
-            or "closed" in s["status_buka"].lower()):
+    if bisnis_tutup(s["status_buka"]):
         return {
             "jasa_utama": "Bisnis Tutup — Lewati",
             "jasa_pendukung": "",
@@ -563,10 +575,11 @@ def skor_pembeli(row, jumlah_cabang=1):
 
     total = int(round(butuh + mampu + hubungi))
 
-    # Bisnis yang sudah tutup permanen tidak mungkin jadi pembeli.
-    if "permanen" in s["status_buka"].lower() or "closed" in s["status_buka"].lower():
+    # Bisnis yang tutup (permanen maupun sementara) tidak bisa dihubungi
+    # sebagai pembeli sekarang.
+    if bisnis_tutup(s["status_buka"]):
         total = 0
-        rincian = {"tutup permanen": 0}
+        rincian = {str(s["status_buka"]).lower() or "bisnis tutup": 0}
 
     if total >= 75:
         tier = TIER_PANAS
@@ -614,6 +627,9 @@ def nilai_lead(row, jumlah_cabang=1):
     Row diubah di tempat dan juga dikembalikan, supaya enak dipakai dalam
     list comprehension maupun loop biasa.
     """
+    # Impor malas: scrapers.kontak mengimpor modul ini untuk helper nomor.
+    from scrapers import kontak
+    kontak.rapikan_kontak(row)
     row.update(rekomendasi_jasa(row))
     hasil = skor_pembeli(row, jumlah_cabang)
     row["skor_pembeli"] = hasil["skor_pembeli"]
@@ -621,31 +637,3 @@ def nilai_lead(row, jumlah_cabang=1):
     row["skor_popularitas"] = skor_popularitas(row.get("rating"),
                                                row.get("jumlah_ulasan"))
     return row
-
-
-def pesan_wa(row, pengirim="", usaha="", template=""):
-    """
-    Rakit pesan WhatsApp pembuka dari alasan_pitch.
-
-    Template bisa diubah lewat config.py (PESAN_TEMPLATE) tanpa menyentuh kode.
-    """
-    if not template:
-        template = (
-            "Halo {nama}, perkenalkan saya {pengirim} dari {usaha}.\n\n"
-            "{alasan}\n\n"
-            "Boleh saya kirimkan contoh hasil kerja dan estimasi biayanya?"
-        )
-    alasan = str(row.get("alasan_pitch") or "").strip()
-    if not alasan:
-        alasan = ("Saya melihat profil Google Maps bisnis Anda dan ada beberapa hal "
-                  "yang bisa dioptimasi untuk mendatangkan lebih banyak pelanggan.")
-    try:
-        return template.format(
-            nama=row.get("nama_bisnis") or "Bapak/Ibu",
-            pengirim=pengirim or "saya",
-            usaha=usaha or "tim digital kami",
-            alasan=alasan,
-            jasa=row.get("jasa_utama") or "",
-        )
-    except (KeyError, IndexError):
-        return alasan

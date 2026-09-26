@@ -18,6 +18,7 @@ import sys
 from datetime import datetime
 
 import config
+import db
 from scrapers.gmaps import run_scrape
 
 
@@ -127,6 +128,8 @@ def main():
     print("  Tekan Ctrl+C untuk berhenti — hasil sementara tetap disimpan.")
     print("=" * 60)
 
+    # Satu kali di awal proses: menandai run lama yang mati sebagai "terputus".
+    db.init_db()
     signal.signal(signal.SIGINT, _minta_berhenti)
     try:
         nama_file = run_scrape(params, _cetak, lambda: _berhenti)

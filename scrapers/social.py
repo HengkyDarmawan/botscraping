@@ -16,6 +16,8 @@ from pathlib import Path
 
 import pandas as pd
 import instaloader
+
+import config
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
 from playwright_stealth import Stealth
 
@@ -479,7 +481,7 @@ async def _gemini_social(platform, keyword, max_results, api_key, cb):
                     'Kembalikan HANYA JSON array valid.'
                 )
             response = client.models.generate_content(
-                model="gemini-2.0-flash",
+                model=config.GEMINI_MODEL,
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     tools=[types.Tool(google_search=types.GoogleSearch())]

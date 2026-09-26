@@ -17,12 +17,33 @@ import re
 import sqlite3
 import threading
 import urllib.parse
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime, timedelta
 from pathlib import Path
 
-DB_PATH = Path("data") / "leads.db"
+BASE_DIR = Path(__file__).resolve().parent
 
-_conn = None
+# ─── Ruang data ───────────────────────────────────────────────────────────────
+# Satu file database per jenis prospek. "webdev" = calon klien jasa website &
+# digital marketing, "komponen" = calon pembeli komponen komputer (ISB). Kedua
+# ruang memakai skema lead yang sama, tapi datanya — termasuk anti-duplikat —
+# terpisah total: bisnis yang sama boleh jadi lead di dua ruang sekaligus.
+#
+# Ruang aktif dibawa lewat ContextVar, jadi seluruh fungsi di modul ini dan
+# seluruh pipeline scrapers/gmaps.py cukup memanggil `get_conn()` seperti biasa.
+# asyncio.run/gather/to_thread menyalin context, sehingga satu job yang dibungkus
+# `with db.ruang("komponen")` menulis ke komponen.db sampai selesai.
+RUANG_PATH = {
+    "webdev":   BASE_DIR / "data" / "leads.db",
+    "komponen": BASE_DIR / "data" / "komponen.db",
+}
+_RUANG = ContextVar("ruang_db", default="webdev")
+
+# Alias lama; menunjuk database web-dev.
+DB_PATH = RUANG_PATH["webdev"]
+
+_conns = {}
 _lock = threading.RLock()
 
 # Rata-rata hari per bulan — dipakai untuk mengubah "6 bulan" jadi rentang hari.
@@ -32,10 +53,13 @@ _HARI_PER_BULAN = 30.44
 # ini hasil kerja manual user, bukan hasil scraping. Scraper juga memakainya
 # untuk memulihkan kolom ini saat merakit baris "Update Kontak", jadi namanya
 # publik; `_KOLOM_MILIK_USER` dipertahankan sebagai alias lama.
-KOLOM_MILIK_USER = {"status_leads", "catatan", "tanggal_follow_up", "first_seen_at"}
+KOLOM_MILIK_USER = {"status_leads", "catatan", "tanggal_follow_up", "first_seen_at",
+                    # ruang komponen
+                    "nama_pic", "proposal_nomor", "proposal_tanggal",
+                    "proposal_file", "tanggal_dihubungi", "kanal_kontak"}
 _KOLOM_MILIK_USER = KOLOM_MILIK_USER
 
-SCHEMA = """
+SCHEMA_LEADS = """
 CREATE TABLE IF NOT EXISTS businesses (
     place_key         TEXT PRIMARY KEY,
 
@@ -166,7 +190,9 @@ CREATE TABLE IF NOT EXISTS run_leads (
 );
 
 CREATE INDEX IF NOT EXISTS idx_run_leads_run ON run_leads(run_id);
+"""
 
+SCHEMA_MP = """
 -- ─── Marketplace intelligence (namespace mp_) ────────────────────────────────
 -- Terpisah total dari tabel leads di atas. `mp_hapus()` hanya menyentuh tabel
 -- ber-prefix mp_, jadi membersihkan data harga tidak pernah bisa menghapus lead.
@@ -270,6 +296,73 @@ CREATE TABLE IF NOT EXISTS mp_runs (
 );
 """
 
+# Alias lama: seluruh skema ruang web-dev.
+SCHEMA = SCHEMA_LEADS + SCHEMA_MP
+
+# Kolom & tabel yang hanya ada di ruang komponen. Kolom ditambahkan lewat
+# _pastikan_kolom (ALTER TABLE) supaya database yang sudah ada ikut terbarui.
+# Kolom kontak & status saring — dipakai KEDUA ruang.
+KOLOM_KONTAK = {
+    "kota":             "TEXT",   # dari baris "plus code" halaman detail GMaps
+    "email_lain":       "TEXT",
+    "whatsapp_lain":    "TEXT",   # nomor WA yang dipanen dari website bisnis
+    "website_utama":    "TEXT",   # website sungguhan (bukan IG/marketplace)
+    "tokopedia":        "TEXT",
+    "shopee":           "TEXT",
+    "marketplace_lain": "TEXT",
+    "linkedin":         "TEXT",
+    "youtube":          "TEXT",
+    # 0 = baru disimpan, syarat kontak belum bisa diputuskan (menunggu
+    # pemeriksaan website); 1 = lolos. Daftar & export hanya membaca 1.
+    # Baris lama (sebelum kolom ini ada) terbaca 1 lewat DEFAULT.
+    "lolos_filter":     "INTEGER DEFAULT 1",
+    # CRM bersama: kapan & lewat apa lead dihubungi, dan nama orang yang dituju.
+    "nama_pic":         "TEXT",
+    "tanggal_dihubungi": "TEXT",
+    "kanal_kontak":     "TEXT",
+}
+
+# Kolom yang hanya ada di ruang komponen (proposal ISB).
+KOLOM_KOMPONEN = {
+    "segmen":           "TEXT",
+    "proposal_nomor":   "TEXT",
+    "proposal_tanggal": "TEXT",
+    "proposal_file":    "TEXT",
+}
+
+# Tabel bersama kedua ruang.
+SCHEMA_BERSAMA = """
+-- Bisnis yang sengaja TIDAK dijadikan lead (tutup / kontak tidak memenuhi /
+-- dihapus manual). Dicatat supaya run berikutnya tidak membuka halamannya lagi.
+CREATE TABLE IF NOT EXISTS dilewati (
+    place_key  TEXT PRIMARY KEY,
+    nama       TEXT,
+    alasan     TEXT,
+    jenis      TEXT,          -- tutup | kontak | manual
+    mode       TEXT DEFAULT '',  -- mode kontak saat dilewati (jenis kontak)
+    dicek_pada TEXT
+);
+
+-- Pengaturan yang diubah user lewat UI (identitas pengirim, template, dll.).
+CREATE TABLE IF NOT EXISTS pengaturan (
+    kunci TEXT PRIMARY KEY,
+    nilai TEXT
+);
+"""
+
+SCHEMA_KOMPONEN = """
+-- Nomor surat proposal: urut harian, reset otomatis karena kuncinya tanggal.
+CREATE TABLE IF NOT EXISTS nomor_surat (
+    tanggal   TEXT NOT NULL,
+    urut      INTEGER NOT NULL,
+    place_key TEXT,
+    nomor     TEXT NOT NULL,
+    dibuat    TEXT,
+    PRIMARY KEY (tanggal, urut)
+);
+CREATE INDEX IF NOT EXISTS idx_nomor_key ON nomor_surat(place_key, tanggal);
+"""
+
 # Kolom mp_products yang tidak boleh ditimpa hasil scrape berikutnya.
 # `is_own` adalah keputusan user, `first_seen_at` adalah sejarah.
 KOLOM_MP_TERLINDUNGI = {"first_seen_at", "is_own", "product_key"}
@@ -277,22 +370,68 @@ KOLOM_MP_TERLINDUNGI = {"first_seen_at", "is_own", "product_key"}
 
 # ─── Koneksi ──────────────────────────────────────────────────────────────────
 
+def ruang_aktif():
+    return _RUANG.get()
+
+
+@contextmanager
+def ruang(nama):
+    """Jalankan blok kode terhadap database ruang `nama`."""
+    if nama not in RUANG_PATH:
+        raise ValueError(f"Ruang database tidak dikenal: {nama}")
+    token = _RUANG.set(nama)
+    try:
+        yield
+    finally:
+        _RUANG.reset(token)
+
+
+def _pastikan_kolom(conn, tabel, kolom):
+    """Tambahkan kolom yang belum ada (migrasi ringan, aman diulang)."""
+    ada = {r["name"] for r in conn.execute(f"PRAGMA table_info({tabel})")}
+    for nama, tipe in kolom.items():
+        if nama not in ada:
+            conn.execute(f"ALTER TABLE {tabel} ADD COLUMN {nama} {tipe}")
+
+
 def get_conn():
-    """Koneksi tunggal yang dipakai bersama semua thread (dilindungi _lock)."""
-    global _conn
+    """
+    Koneksi ruang aktif. Satu koneksi per file, dipakai bersama semua thread
+    (dilindungi _lock).
+    """
+    nama = _RUANG.get()
     with _lock:
-        if _conn is None:
-            DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-            _conn = sqlite3.connect(str(DB_PATH), check_same_thread=False)
-            _conn.row_factory = sqlite3.Row
-            _conn.execute("PRAGMA journal_mode=WAL")
-            _conn.executescript(SCHEMA)
-            _conn.commit()
-        return _conn
+        conn = _conns.get(nama)
+        if conn is None:
+            path = RUANG_PATH[nama]
+            path.parent.mkdir(parents=True, exist_ok=True)
+            conn = sqlite3.connect(str(path), check_same_thread=False)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.executescript(SCHEMA_LEADS)
+            _pastikan_kolom(conn, "businesses", KOLOM_KONTAK)
+            conn.executescript(SCHEMA_BERSAMA)
+            _pastikan_kolom(conn, "dilewati", {"mode": "TEXT DEFAULT ''"})
+            if nama == "webdev":
+                conn.executescript(SCHEMA_MP)
+            else:
+                _pastikan_kolom(conn, "businesses", KOLOM_KOMPONEN)
+                conn.executescript(SCHEMA_KOMPONEN)
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_biz_segmen "
+                             "ON businesses(segmen)")
+            conn.commit()
+            _conns[nama] = conn
+        return conn
 
 
 def init_db():
-    """Buat file database + tabel bila belum ada. Aman dipanggil berkali-kali."""
+    """
+    Buat file database + tabel ruang aktif bila belum ada.
+
+    HANYA dipanggil saat app/CLI mulai. Ia menandai setiap run 'berjalan' sebagai
+    'terputus' — dipanggil di tengah proses, ia akan memutus run lain yang sedang
+    benar-benar berjalan di thread sebelah.
+    """
     conn = get_conn()
     # Run yang masih berstatus "berjalan" saat proses baru dimulai berarti proses
     # yang memegangnya sudah mati (crash / laptop tidur / app di-restart). Ditandai
@@ -305,7 +444,7 @@ def init_db():
             (_now(),),
         )
         conn.commit()
-    return str(DB_PATH.resolve())
+    return str(RUANG_PATH[_RUANG.get()])
 
 
 def _now():
@@ -444,7 +583,7 @@ def _kolom_tabel():
 
 # ─── Tulis ────────────────────────────────────────────────────────────────────
 
-def upsert_business(row):
+def upsert_business(row, sentuh_scrape=True):
     """
     Simpan bisnis baru, atau perbarui yang sudah ada.
 
@@ -458,6 +597,11 @@ def upsert_business(row):
     memanggil scoring.nilai_lead lebih dulu — dan satu yang lupa berarti lead
     tanpa skor yang tidak akan pernah muncul di penyaringan tier.
 
+    `sentuh_scrape=False` dipakai saat menyegarkan data bisnis LAMA (jalur
+    "Update Kontak"): datanya ditulis, tapi `last_scraped_at` & `times_seen`
+    tidak disentuh — kalau disentuh, masa tenggang anti-duplikat 6 bulan ikut
+    ter-reset setiap kali kontaknya dicek.
+
     Return "insert" atau "update".
     """
     place_key = row.get("place_key")
@@ -467,8 +611,12 @@ def upsert_business(row):
     if row.get("skor_pembeli") in (None, "") or not row.get("tier"):
         # Impor malas: db.py tetap bisa dipakai tanpa menyeret requests/bs4 yang
         # dibutuhkan scrapers.scoring lewat scrapers.enrich.
-        from scrapers import scoring
-        scoring.nilai_lead(row, jumlah_cabang=hitung_cabang(row.get("nama_bisnis")))
+        if _RUANG.get() == "komponen":
+            from scrapers import komponen
+            komponen.nilai_lead(row, jumlah_cabang=hitung_cabang(row.get("nama_bisnis")))
+        else:
+            from scrapers import scoring
+            scoring.nilai_lead(row, jumlah_cabang=hitung_cabang(row.get("nama_bisnis")))
 
     kolom_valid = set(_kolom_tabel())
     data = {k: v for k, v in row.items() if k in kolom_valid}
@@ -505,9 +653,14 @@ def upsert_business(row):
         # saat run berikutnya karena tampilan halamannya berbeda.
         data = {k: v for k, v in data.items()
                 if v is not None or ada.get(k) is None}
-        data["last_scraped_at"] = now
+        data.pop("place_key", None)
         data["last_checked_at"] = now
-        data["times_seen"] = int(ada.get("times_seen") or 0) + 1
+        if sentuh_scrape:
+            data["last_scraped_at"] = now
+            data["times_seen"] = int(ada.get("times_seen") or 0) + 1
+        else:
+            data.pop("last_scraped_at", None)
+            data.pop("times_seen", None)
         kolom = list(data.keys())
         conn.execute(
             f"UPDATE businesses SET {', '.join(f'{k} = ?' for k in kolom)} "
@@ -573,55 +726,6 @@ def refresh_contacts(place_key, telepon=None, website=None, email=None, **extra)
     return perubahan
 
 
-def touch_checked(place_key):
-    """Tandai bisnis sudah dicek hari ini walau tidak ada yang berubah."""
-    with _lock:
-        conn = get_conn()
-        conn.execute(
-            "UPDATE businesses SET last_checked_at = ? WHERE place_key = ?",
-            (_now(), place_key),
-        )
-        conn.commit()
-
-
-def simpan_intelijen(place_key, skor_pembeli, tier, jasa_utama,
-                     jasa_pendukung, alasan_pitch, jalur=""):
-    """Perbarui hasil scoring/rekomendasi tanpa menyentuh kolom lain."""
-    with _lock:
-        conn = get_conn()
-        conn.execute(
-            "UPDATE businesses SET skor_pembeli = ?, tier = ?, jasa_utama = ?, "
-            "jalur = ?, jasa_pendukung = ?, alasan_pitch = ? WHERE place_key = ?",
-            (skor_pembeli, tier, jasa_utama, jalur, jasa_pendukung, alasan_pitch,
-             place_key),
-        )
-        conn.commit()
-
-
-def update_status(place_key, status_leads=None, catatan=None, tanggal_follow_up=None):
-    """Ubah kolom CRM dari halaman /leads."""
-    set_parts, nilai = [], []
-    if status_leads is not None:
-        set_parts.append("status_leads = ?")
-        nilai.append(status_leads)
-    if catatan is not None:
-        set_parts.append("catatan = ?")
-        nilai.append(catatan)
-    if tanggal_follow_up is not None:
-        set_parts.append("tanggal_follow_up = ?")
-        nilai.append(tanggal_follow_up or None)
-    if not set_parts:
-        return False
-    nilai.append(place_key)
-    with _lock:
-        conn = get_conn()
-        cur = conn.execute(
-            f"UPDATE businesses SET {', '.join(set_parts)} WHERE place_key = ?", nilai
-        )
-        conn.commit()
-    return cur.rowcount > 0
-
-
 def log_search(keyword, area, total_ditemukan=0, baru=0, dilewati=0, diupdate=0):
     with _lock:
         conn = get_conn()
@@ -631,17 +735,6 @@ def log_search(keyword, area, total_ditemukan=0, baru=0, dilewati=0, diupdate=0)
             (keyword, area, _now(), total_ditemukan, baru, dilewati, diupdate),
         )
         conn.commit()
-
-
-def riwayat_pencarian(keyword, area, batas=1):
-    """Kapan kombinasi keyword+area ini terakhir dijalankan (untuk info di UI)."""
-    with _lock:
-        cur = get_conn().execute(
-            "SELECT * FROM searches WHERE keyword = ? AND area = ? "
-            "ORDER BY run_at DESC LIMIT ?",
-            (keyword, area, batas),
-        )
-        return [dict(r) for r in cur.fetchall()]
 
 
 def perubahan_terbaru(place_key=None, batas=100):
@@ -655,6 +748,246 @@ def perubahan_terbaru(place_key=None, batas=100):
     with _lock:
         cur = get_conn().execute(sql, args)
         return [dict(r) for r in cur.fetchall()]
+
+
+# ─── Daftar lewati & hapus lead (ruang aktif) ─────────────────────────────────
+
+# Berapa hari bisnis yang dilewati tidak dibuka lagi. None = selamanya
+# ("manual": user menghapus lead salah scrape dan memilih jangan diambil lagi).
+HARI_LEWATI = {"tutup": 180, "kontak": 30, "manual": None}
+
+# Lead "aktif" = lolos syarat saat scraping dan tidak tutup. Daftar, hitungan,
+# dan export hanya membaca baris ini.
+SQL_AKTIF = ("COALESCE(lolos_filter, 1) = 1 AND "
+             "LOWER(COALESCE(status_buka, '')) NOT LIKE '%tutup%' AND "
+             "LOWER(COALESCE(status_buka, '')) NOT LIKE '%closed%'")
+
+
+def lewati_catat(place_key, nama, alasan, jenis="kontak", mode=""):
+    if not place_key:
+        return
+    with _lock:
+        conn = get_conn()
+        conn.execute(
+            "INSERT OR REPLACE INTO dilewati (place_key, nama, alasan, jenis, mode, "
+            "dicek_pada) VALUES (?, ?, ?, ?, ?, ?)",
+            (place_key, nama or "", alasan or "", jenis, mode or "", _now()))
+        conn.commit()
+
+
+def lewati_aktif(place_key, mode=""):
+    """
+    Alasan bila bisnis ini masih dalam masa lewati, selain itu None.
+
+    Jenis "kontak" hanya berlaku untuk mode kontak yang SAMA: bisnis yang
+    dilewati karena tidak punya WA tetap harus dibuka pada run yang mencari
+    email. "tutup" dan "manual" berlaku untuk mode apa pun.
+    """
+    if not place_key:
+        return None
+    with _lock:
+        r = get_conn().execute(
+            "SELECT alasan, jenis, mode, dicek_pada FROM dilewati WHERE place_key = ?",
+            (place_key,)).fetchone()
+    if not r:
+        return None
+    if r["jenis"] == "kontak" and (r["mode"] or "") != (mode or ""):
+        return None
+    batas = HARI_LEWATI.get(r["jenis"], 30)
+    if batas is None:
+        return r["alasan"] or r["jenis"]
+    ts = _parse_ts(r["dicek_pada"])
+    if ts is None or (datetime.now() - ts).days >= batas:
+        return None
+    return r["alasan"] or r["jenis"]
+
+
+def lewati_hapus(place_key):
+    with _lock:
+        conn = get_conn()
+        conn.execute("DELETE FROM dilewati WHERE place_key = ?", (place_key,))
+        conn.commit()
+
+
+def kosongkan_lewati():
+    with _lock:
+        conn = get_conn()
+        n = conn.execute("DELETE FROM dilewati").rowcount
+        conn.commit()
+    return n
+
+
+def set_lolos(place_key, nilai=1):
+    with _lock:
+        conn = get_conn()
+        conn.execute("UPDATE businesses SET lolos_filter = ? WHERE place_key = ?",
+                     (int(nilai), place_key))
+        conn.commit()
+
+
+def buang_lead(place_key, nama, alasan, jenis="kontak", mode=""):
+    """
+    Keluarkan lead yang ternyata tidak memenuhi syarat dari daftar leads.
+
+    Hanya menghapus lead yang BELUM disentuh user (status masih Belum
+    Dihubungi, tanpa catatan, baru sekali ditemukan): lead yang sudah dihubungi
+    atau diberi catatan tetap dipertahankan.
+    """
+    with _lock:
+        conn = get_conn()
+        r = conn.execute(
+            "SELECT status_leads, catatan, times_seen FROM businesses "
+            "WHERE place_key = ?", (place_key,)).fetchone()
+        if r and (r["status_leads"] or "Belum Dihubungi") == "Belum Dihubungi" \
+                and not (r["catatan"] or "").strip() and int(r["times_seen"] or 1) <= 1:
+            conn.execute("DELETE FROM businesses WHERE place_key = ?", (place_key,))
+            conn.execute("DELETE FROM run_leads WHERE place_key = ?", (place_key,))
+        elif r:
+            conn.execute("UPDATE businesses SET lolos_filter = 1 WHERE place_key = ?",
+                         (place_key,))
+        conn.commit()
+    lewati_catat(place_key, nama, alasan, jenis, mode)
+
+
+def _hapus_keys(conn, keys, jangan_ambil_lagi):
+    n = 0
+    for i in range(0, len(keys), 500):
+        potong = keys[i:i + 500]
+        tanda = ",".join("?" * len(potong))
+        if jangan_ambil_lagi:
+            sekarang = _now()
+            conn.executemany(
+                "INSERT OR REPLACE INTO dilewati (place_key, nama, alasan, jenis, mode, "
+                "dicek_pada) SELECT place_key, nama_bisnis, 'dihapus manual', 'manual', "
+                "'', ? FROM businesses WHERE place_key = ?",
+                [(sekarang, k) for k in potong])
+        n += conn.execute(f"DELETE FROM businesses WHERE place_key IN ({tanda})",
+                          potong).rowcount
+        conn.execute(f"DELETE FROM run_leads WHERE place_key IN ({tanda})", potong)
+        conn.execute(f"DELETE FROM business_changes WHERE place_key IN ({tanda})", potong)
+    return n
+
+
+def hapus_leads(keys, jangan_ambil_lagi=False):
+    """
+    Hapus lead tertentu beserta jejaknya. Return jumlah yang terhapus.
+
+    `jangan_ambil_lagi` mencatat bisnisnya di daftar lewati tanpa masa berlaku,
+    jadi lead salah scrape tidak muncul lagi di run berikutnya.
+    """
+    keys = [k for k in dict.fromkeys(keys or []) if k]
+    if not keys:
+        return 0
+    with _lock:
+        conn = get_conn()
+        n = _hapus_keys(conn, keys, jangan_ambil_lagi)
+        conn.commit()
+    return n
+
+
+def semua_keys():
+    """Seluruh place_key, termasuk yang tersembunyi (tertunda / tutup)."""
+    with _lock:
+        return [r["place_key"] for r in
+                get_conn().execute("SELECT place_key FROM businesses")]
+
+
+def bersihkan_tertunda():
+    """
+    Hapus lead yang masih menunggu pemeriksaan website (lolos_filter = 0).
+
+    HANYA dipanggil saat app mulai, ketika pasti tidak ada run yang berjalan.
+    Baris seperti ini tertinggal kalau server dimatikan di tengah scraping:
+    tersembunyi dari daftar, tapi tetap menahan anti-duplikat. Dihapus tanpa
+    masuk daftar lewati, supaya run berikutnya (atau "Lanjutkan run")
+    mengambilnya ulang lengkap dengan pemeriksaan websitenya.
+    """
+    with _lock:
+        conn = get_conn()
+        keys = [r["place_key"] for r in conn.execute(
+            "SELECT place_key FROM businesses WHERE lolos_filter = 0")]
+        n = _hapus_keys(conn, keys, jangan_ambil_lagi=False)
+        conn.commit()
+    return n
+
+
+# ─── CRM: status & jadwal follow-up (ruang aktif) ─────────────────────────────
+
+_KANAL = {"Email Terkirim": "email", "WA Terkirim": "wa"}
+# Status yang berarti urusan dengan lead ini selesai — jadwal follow-up dikosongkan.
+STATUS_SELESAI = ("Deal", "Tidak Tertarik", "Jangan Hubungi")
+
+
+def update_crm(place_key, status=None, catatan=None, tanggal_follow_up=None,
+               nama_pic=None, fu1_hari=3, fu2_hari=7):
+    """
+    Ubah kolom CRM. Status kirim mengisi jadwal follow-up otomatis:
+
+      Email/WA Terkirim → tanggal_dihubungi = hari ini, follow-up = +fu1_hari
+      Follow-up 1       → follow-up = tanggal_dihubungi + fu2_hari
+      Follow-up 2 / Deal / Tidak Tertarik / Jangan Hubungi → follow-up dikosongkan
+
+    `tanggal_follow_up` yang dikirim eksplisit selalu menang atas jadwal otomatis.
+    Return baris terbaru, atau None bila lead tidak ada.
+    """
+    lama = get(place_key)
+    if not lama:
+        return None
+    fu1, fu2 = int(fu1_hari or 3), int(fu2_hari or 7)
+    ubah = {}
+    if catatan is not None:
+        ubah["catatan"] = catatan
+    if nama_pic is not None:
+        ubah["nama_pic"] = nama_pic.strip()
+    if status is not None:
+        ubah["status_leads"] = status
+        sekarang = datetime.now()
+        if status in _KANAL:
+            ubah["tanggal_dihubungi"] = sekarang.strftime("%Y-%m-%d")
+            kanal = set(filter(None, str(lama.get("kanal_kontak") or "").split(",")))
+            kanal.add(_KANAL[status])
+            ubah["kanal_kontak"] = ",".join(sorted(kanal))
+            ubah["tanggal_follow_up"] = (sekarang + timedelta(days=fu1)).strftime("%Y-%m-%d")
+        elif status == "Follow-up 1":
+            dasar = _parse_ts(lama.get("tanggal_dihubungi")) or sekarang
+            tgl = dasar + timedelta(days=fu2)
+            if tgl.date() <= sekarang.date():
+                tgl = sekarang + timedelta(days=max(fu2 - fu1, 1))
+            ubah["tanggal_follow_up"] = tgl.strftime("%Y-%m-%d")
+        elif status == "Follow-up 2" or status in STATUS_SELESAI:
+            ubah["tanggal_follow_up"] = None
+    if tanggal_follow_up is not None:
+        ubah["tanggal_follow_up"] = tanggal_follow_up or None
+    if ubah:
+        with _lock:
+            conn = get_conn()
+            conn.execute(
+                f"UPDATE businesses SET {', '.join(f'{k} = ?' for k in ubah)} "
+                f"WHERE place_key = ?", list(ubah.values()) + [place_key])
+            conn.commit()
+    return get(place_key)
+
+
+def pengaturan(bawaan):
+    """Nilai pengaturan ruang aktif; kunci yang belum disimpan memakai `bawaan`."""
+    hasil = dict(bawaan)
+    with _lock:
+        for r in get_conn().execute("SELECT kunci, nilai FROM pengaturan"):
+            if r["kunci"] in hasil and r["nilai"] not in (None, ""):
+                hasil[r["kunci"]] = r["nilai"]
+    return hasil
+
+
+def simpan_pengaturan(bawaan, nilai):
+    """Simpan kunci yang dikenal `bawaan`; kunci lain diabaikan."""
+    with _lock:
+        conn = get_conn()
+        for k, v in (nilai or {}).items():
+            if k in bawaan:
+                conn.execute("INSERT OR REPLACE INTO pengaturan (kunci, nilai) "
+                             "VALUES (?, ?)", (k, str(v).strip()))
+        conn.commit()
+    return pengaturan(bawaan)
 
 
 # ─── Query untuk halaman CRM ──────────────────────────────────────────────────
@@ -826,14 +1159,15 @@ def run_terputus_terakhir():
 
 def query_leads(tier=None, jasa_utama=None, area=None, status_leads=None,
                 punya_wa=None, skor_min=None, skor_max=None, q=None,
-                run=None, urut="skor_pembeli", limit=50, offset=0):
+                run=None, urut="skor_pembeli", limit=50, offset=0, kontak=None,
+                follow_up=False, tanpa_opt_out=False):
     """
     Ambil lead dengan filter. Return (rows, total_sebelum_paginasi).
 
     `run` membatasi hasil ke lead yang diklaim satu run scraping — dipakai tombol
     "Buat Excel dari run itu" untuk run yang terputus.
     """
-    where, args = [], []
+    where, args = [SQL_AKTIF], []
     if run:
         where.append("place_key IN (SELECT place_key FROM run_leads WHERE run_id = ?)")
         args.append(run)
@@ -847,10 +1181,30 @@ def query_leads(tier=None, jasa_utama=None, area=None, status_leads=None,
         where.append("area_pencarian = ?")
         args.append(area)
     if status_leads:
-        where.append("status_leads = ?")
+        # NULL diperlakukan sama dengan "Belum Dihubungi", seperti di stats().
+        where.append("COALESCE(status_leads, 'Belum Dihubungi') = ?")
         args.append(status_leads)
     if punya_wa:
         where.append("whatsapp_link IS NOT NULL AND whatsapp_link != ''")
+    ada_wa = "COALESCE(whatsapp_link, '') != ''"
+    ada_email = "COALESCE(email, '') != ''"
+    kondisi_kontak = {
+        "wa": ada_wa,
+        "email": ada_email,
+        "wa_atau_email": f"({ada_wa} OR {ada_email})",
+        "wa_dan_email": f"({ada_wa} AND {ada_email})",
+        "tanpa": f"NOT ({ada_wa} OR {ada_email})",
+    }.get(kontak)
+    if kondisi_kontak:
+        where.append(kondisi_kontak)
+    if follow_up:
+        where.append("tanggal_follow_up IS NOT NULL AND tanggal_follow_up <= ? AND "
+                     "COALESCE(status_leads, 'Belum Dihubungi') NOT IN "
+                     "('Deal', 'Tidak Tertarik', 'Jangan Hubungi')")
+        args.append(datetime.now().strftime("%Y-%m-%d"))
+    if tanpa_opt_out:
+        # Lead yang minta tidak dihubungi lagi tidak boleh ikut export (UU PDP).
+        where.append("COALESCE(status_leads, '') != 'Jangan Hubungi'")
     if skor_min is not None:
         where.append("COALESCE(skor_pembeli, 0) >= ?")
         args.append(int(skor_min))
@@ -876,10 +1230,11 @@ def query_leads(tier=None, jasa_utama=None, area=None, status_leads=None,
         total = conn.execute(
             f"SELECT COUNT(*) AS n FROM businesses{klausa}", args
         ).fetchone()["n"]
-        cur = conn.execute(
-            f"SELECT * FROM businesses{klausa} ORDER BY {kolom_urut} LIMIT ? OFFSET ?",
-            args + [int(limit), int(offset)],
-        )
+        sql = f"SELECT * FROM businesses{klausa} ORDER BY {kolom_urut}"
+        if limit:
+            cur = conn.execute(sql + " LIMIT ? OFFSET ?", args + [int(limit), int(offset)])
+        else:
+            cur = conn.execute(sql, args)
         rows = [dict(r) for r in cur.fetchall()]
     return rows, total
 
@@ -924,6 +1279,9 @@ def stats():
     with _lock:
         conn = get_conn()
 
+        # Hanya lead aktif — sama dengan yang tampil di halaman Leads.
+        B = f"(SELECT * FROM businesses WHERE {SQL_AKTIF})"
+
         def satu(sql, args=()):
             return conn.execute(sql, args).fetchone()["n"] or 0
 
@@ -931,39 +1289,44 @@ def stats():
             return {r["k"]: r["n"] for r in conn.execute(sql, args).fetchall() if r["k"]}
 
         return {
-            "total": satu("SELECT COUNT(*) AS n FROM businesses"),
+            "total": satu(f"SELECT COUNT(*) AS n FROM {B}"),
             "per_tier": kelompok(
-                "SELECT tier AS k, COUNT(*) AS n FROM businesses GROUP BY tier"
+                f"SELECT tier AS k, COUNT(*) AS n FROM {B} GROUP BY tier"
             ),
             "per_jasa": kelompok(
-                "SELECT jasa_utama AS k, COUNT(*) AS n FROM businesses "
+                f"SELECT jasa_utama AS k, COUNT(*) AS n FROM {B} "
                 "GROUP BY jasa_utama ORDER BY n DESC LIMIT 12"
             ),
             "per_area": kelompok(
-                "SELECT area_pencarian AS k, COUNT(*) AS n FROM businesses "
+                f"SELECT area_pencarian AS k, COUNT(*) AS n FROM {B} "
                 "GROUP BY area_pencarian ORDER BY n DESC LIMIT 10"
             ),
             "per_status": kelompok(
-                "SELECT status_leads AS k, COUNT(*) AS n FROM businesses "
-                "GROUP BY status_leads"
+                "SELECT COALESCE(status_leads, 'Belum Dihubungi') AS k, "
+                f"COUNT(*) AS n FROM {B} GROUP BY k"
             ),
             "belum_dihubungi": satu(
-                "SELECT COUNT(*) AS n FROM businesses "
+                f"SELECT COUNT(*) AS n FROM {B} "
                 "WHERE status_leads IS NULL OR status_leads = 'Belum Dihubungi'"
             ),
             "punya_wa": satu(
-                "SELECT COUNT(*) AS n FROM businesses "
+                f"SELECT COUNT(*) AS n FROM {B} "
                 "WHERE whatsapp_link IS NOT NULL AND whatsapp_link != ''"
             ),
             "follow_up_hari_ini": satu(
-                "SELECT COUNT(*) AS n FROM businesses "
+                f"SELECT COUNT(*) AS n FROM {B} "
                 "WHERE tanggal_follow_up IS NOT NULL AND tanggal_follow_up <= ? "
-                "AND status_leads NOT IN ('Deal', 'Tidak Tertarik')",
+                "AND COALESCE(status_leads, 'Belum Dihubungi') "
+                "NOT IN ('Deal', 'Tidak Tertarik', 'Jangan Hubungi')",
                 (hari_ini,),
             ),
             "baru_30_hari": satu(
                 "SELECT COUNT(*) AS n FROM businesses WHERE first_seen_at >= ?",
                 (batas_30,),
+            ),
+            "tanpa_kontak": satu(
+                f"SELECT COUNT(*) AS n FROM {B} WHERE COALESCE(whatsapp_link, '') = '' "
+                "AND COALESCE(email, '') = ''"
             ),
             "perubahan_30_hari": satu(
                 "SELECT COUNT(*) AS n FROM business_changes WHERE changed_at >= ?",

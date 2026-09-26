@@ -81,22 +81,21 @@ PESAN_TEMPLATE = (
 )
 
 # ─── OUTPUT ───────────────────────────────────────────────────────────────────
-OUTPUT_FILE   = "output/leads_gmaps"  # Path file output (ekstensi ditambah otomatis)
 OUTPUT_FORMAT = "excel"               # "excel" = file .xlsx | "csv" = file .csv
 
 # ─── APIFY PROXY (Rotasi IP Otomatis) ────────────────────────────────────────
 # Daftar: apify.com → Settings → Integrations → API tokens
 USE_PROXY             = False                    # Ubah ke True untuk mengaktifkan proxy
-PROXY_SERVER          = "http://proxy.apify.com:8000"
 APIFY_PROXY_TOKEN     = "YOUR_APIFY_TOKEN_HERE"  # Ganti dengan token dari akun Apify
 APIFY_PROXY_GROUP     = "RESIDENTIAL"            # "RESIDENTIAL" atau "DATACENTER"
 APIFY_PROXY_COUNTRY   = "ID"                     # Kode negara IP (kosongkan untuk random)
 ROTATE_IP_PER_LISTING = True                     # True = IP baru tiap listing bisnis
 
-# ─── TIMING ───────────────────────────────────────────────────────────────────
-# Jeda acak antara setiap aksi (scroll, klik, navigasi) dalam satuan detik
-MIN_DELAY = 2.0  # Jeda minimum (detik)
-MAX_DELAY = 4.0  # Jeda maksimum (detik)
+# ─── GEMINI AI ────────────────────────────────────────────────────────────────
+# Satu nama model untuk semua fitur Gemini (Google Maps, Social, Website Leads,
+# Pricing). Google berkala mempensiunkan model lama — kalau muncul error
+# "model not found", cukup ganti nilai ini.
+GEMINI_MODEL = "gemini-2.5-flash"
 
 # ─── BROWSER ──────────────────────────────────────────────────────────────────
 HEADLESS    = False  # False = tampilkan jendela browser (bagus untuk development)
@@ -143,7 +142,7 @@ JEDA_LISTING_MAX = 1.0
 # Nilai default untuk modul scrapers/pricing.py (bisa di-override dari UI).
 PRICING_HEADLESS   = False  # False = browser tampil (paling sulit dideteksi bot)
 PRICING_USE_PROXY  = False  # True  = wajibkan proxy residential (disarankan untuk Shopee)
-# Field proxy memakai konfigurasi proxy yang sama di atas (PROXY_SERVER, dll).
+# Field proxy memakai konfigurasi proxy Apify yang sama di atas.
 PRICING_MAX_RESULTS = 20    # Maksimal produk per sumber/toko
 
 # ─── ENGINE "CHROME SAYA" (sesi login — untuk Shopee) ─────────────────────────

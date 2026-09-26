@@ -27,6 +27,7 @@ import pandas as pd
 from playwright.async_api import async_playwright
 from playwright_stealth import Stealth
 
+import config
 import db
 from . import mp_api
 from . import mp_common
@@ -818,7 +819,7 @@ async def _gemini_pricing(keyword, sources, max_results, api_key, cb):
             'Kembalikan HANYA JSON array valid.'
         )
         response = client.models.generate_content(
-            model="gemini-2.0-flash",
+            model=config.GEMINI_MODEL,
             contents=prompt,
             config=types.GenerateContentConfig(
                 tools=[types.Tool(google_search=types.GoogleSearch())]

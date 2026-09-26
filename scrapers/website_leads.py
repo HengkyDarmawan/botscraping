@@ -6,6 +6,7 @@ import asyncio
 import json
 import re
 import sys
+import uuid
 from datetime import datetime
 from pathlib import Path
 
@@ -13,6 +14,9 @@ import pandas as pd
 from fake_useragent import UserAgent
 from playwright.async_api import async_playwright
 from playwright_stealth import Stealth
+
+import config
+import db
 
 OUTPUT_DIR = Path("output")
 
@@ -67,8 +71,8 @@ async def _gmaps_no_website(keyword, area, max_results, headless, cb):
 
     cb(5, f"Google Maps: mencari '{keyword}' di {area}...", 0)
 
-    # _scrape_query membuat context/page-nya sendiri per listing (agar IP bisa
-    # dirotasi), jadi di sini cukup sediakan browser-nya.
+    # _scrape_query mengelola context & halamannya sendiri (kolam context yang
+    # dipakai ulang), jadi di sini cukup sediakan browser-nya.
     async with async_playwright() as p:
         browser = await p.chromium.launch(
             headless=headless,
@@ -80,14 +84,25 @@ async def _gmaps_no_website(keyword, area, max_results, headless, cb):
             query = f"{keyword} {area}".strip()
             # Halaman ini punya file output sendiri dan tidak memakai aturan
             # anti-duplikat database, jadi dedup dimatikan.
+            # Syarat "belum punya website" dipasang sebagai filter awal, supaya
+            # listing yang jelas punya website tidak perlu dibuka sama sekali.
             params = {
-                "_filters": {},
+                "_filters": {"require_no_website": True},
                 "dedup_enabled": False,
                 "refresh_kontak": False,
                 "radius_km": 0,
             }
+            # Lead yang dibaca tetap tersimpan ke CRM web-dev (memang prospek
+            # jasa website); run_id membuatnya tercatat sebagai satu run yang
+            # utuh, bukan baris yatim tanpa asal-usul.
+            run_id = "wl-" + uuid.uuid4().hex[:8]
+            db.run_start(run_id, {"sumber": "website_leads", "keyword": keyword,
+                                  "area": area}, 1)
             hasil = await _scrape_query(browser, user_agent, query, area,
-                                        max_results, params, cb, 5, 50)
+                                        max_results, params, cb, 5, 50,
+                                        run_id=run_id)
+            db.run_tandai_target(run_id, 1)
+            db.run_finish(run_id, "selesai", "", len(hasil["baru"]), 0)
             raw = hasil["baru"]
 
             tanggal = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -160,7 +175,7 @@ async def _gemini_search(intent_keyword, max_results, api_key, cb):
         cb(65, "Gemini AI: mengirim query...", 0)
 
         response = client.models.generate_content(
-            model="gemini-2.0-flash",
+            model=config.GEMINI_MODEL,
             contents=prompt,
             config=types.GenerateContentConfig(
                 tools=[types.Tool(google_search=types.GoogleSearch())]
