@@ -19,28 +19,36 @@
     <a href="/" class="nav-item {% if request.path == '/' %}active{% endif %}">
       <i class="bi bi-speedometer2"></i> Dashboard
     </a>
-    <div class="nav-section">SCRAPER</div>
+    <div class="nav-section">KLIEN WEBSITE</div>
     <a href="/gmaps" class="nav-item {% if request.path == '/gmaps' %}active{% endif %}">
       <i class="bi bi-geo-alt-fill"></i> Google Maps
-    </a>
-    <a href="/pricing" class="nav-item {% if request.path == '/pricing' %}active{% endif %}">
-      <i class="bi bi-tags-fill"></i> Price Comparison
-    </a>
-    <a href="/social" class="nav-item {% if request.path == '/social' %}active{% endif %}">
-      <i class="bi bi-people-fill"></i> Social Media
     </a>
     <a href="/website-leads" class="nav-item {% if request.path == '/website-leads' %}active{% endif %}">
       <i class="bi bi-globe-americas"></i> Website Leads
     </a>
-    <div class="nav-section">CRM</div>
+    <a href="/social" class="nav-item {% if request.path == '/social' %}active{% endif %}">
+      <i class="bi bi-people-fill"></i> Social Media
+    </a>
     <a href="/leads" class="nav-item {% if request.path == '/leads' %}active{% endif %}">
       <i class="bi bi-person-lines-fill"></i> Database Leads
+    </a>
+    <div class="nav-section">DISTRIBUTOR KOMPONEN</div>
+    <a href="/komponen" class="nav-item {% if request.path == '/komponen' %}active{% endif %}">
+      <i class="bi bi-cpu-fill"></i> Scraper Komponen
+    </a>
+    <a href="/komponen/leads" class="nav-item {% if request.path == '/komponen/leads' %}active{% endif %}">
+      <i class="bi bi-person-vcard"></i> Leads Komponen
+    </a>
+    <a href="/pricing" class="nav-item {% if request.path == '/pricing' %}active{% endif %}">
+      <i class="bi bi-tags-fill"></i> Price Comparison
     </a>
     <div class="nav-section">DATA</div>
     <a href="/results" class="nav-item {% if request.path == '/results' %}active{% endif %}">
       <i class="bi bi-table"></i> Hasil & Download
     </a>
   </nav>
+  <!-- Scraping yang sedang berjalan di server — terlihat dari halaman mana pun -->
+  <div id="jobIndikator" class="px-3 pb-2 d-none"></div>
   <div class="sidebar-footer">
     <small class="text-muted"><i class="bi bi-circle-fill text-success me-1" style="font-size:.5rem"></i>Berjalan di localhost:5000</small>
   </div>
@@ -103,20 +111,21 @@
     const modal = new bootstrap.Modal(document.getElementById('previewModal'));
     document.getElementById('previewContent').innerHTML = '<div class="spinner-border text-primary"></div><p class="mt-2">Memuat data...</p>';
     modal.show();
-    fetch('/preview/' + filename)
+    fetch('/preview/' + encodeURIComponent(filename))
       .then(r => r.json())
       .then(data => {
-        if (data.error) { document.getElementById('previewContent').innerHTML = '<p class="text-danger">' + data.error + '</p>'; return; }
+        if (data.error) { document.getElementById('previewContent').innerHTML = '<p class="text-danger">' + escapeHtml(data.error) + '</p>'; return; }
         let html = `<div class="px-3 py-2 bg-light border-bottom"><small class="text-muted">Total: <strong>${data.total}</strong> baris | Menampilkan 50 pertama</small></div>`;
         html += '<div class="table-responsive"><table class="table table-sm table-hover table-striped mb-0"><thead class="table-dark"><tr>';
-        data.columns.forEach(c => html += `<th class="text-nowrap">${c}</th>`);
+        data.columns.forEach(c => html += `<th class="text-nowrap">${escapeHtml(c)}</th>`);
         html += '</tr></thead><tbody>';
         data.rows.forEach(row => {
           html += '<tr>';
           data.columns.forEach(c => {
-            const val = row[c] || '';
-            if (String(val).startsWith('http')) {
-              html += `<td><a href="${val}" target="_blank" class="text-truncate d-inline-block" style="max-width:150px">${val}</a></td>`;
+            // Nilai berasal dari situs pihak ketiga — selalu di-escape.
+            const val = escapeHtml(row[c] ?? '');
+            if (val.startsWith('http')) {
+              html += `<td><a href="${val}" target="_blank" rel="noopener" class="text-truncate d-inline-block" style="max-width:150px">${val}</a></td>`;
             } else {
               html += `<td class="text-nowrap">${val}</td>`;
             }
@@ -127,6 +136,58 @@
         document.getElementById('previewContent').innerHTML = html;
       });
   }
+</script>
+<div class="toast-container position-fixed bottom-0 end-0 p-3" id="jobToasts"></div>
+<script>
+  // ─── Indikator job latar belakang ────────────────────────────────────────
+  // Scraping berjalan di thread server, bukan di tab browser. Indikator ini
+  // menunjukkan job yang masih jalan di semua halaman, dan memberi notifikasi
+  // saat selesai — walau user sedang membuka menu lain.
+  (() => {
+    const HALAMAN = { komponen: '/komponen', gmaps: '/gmaps' };
+    const KUNCI = 'jobDipantau';
+    const baca = () => { try { return JSON.parse(sessionStorage.getItem(KUNCI) || '{}'); } catch (e) { return {}; } };
+    const tulis = v => { try { sessionStorage.setItem(KUNCI, JSON.stringify(v)); } catch (e) { /* abaikan */ } };
+
+    function toast(teks, href) {
+      const el = document.createElement('div');
+      el.className = 'toast align-items-center text-bg-success border-0';
+      el.innerHTML = `<div class="d-flex"><div class="toast-body">${teks}
+        ${href ? `<a href="${href}" class="text-white fw-bold ms-1">Lihat</a>` : ''}</div>
+        <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button></div>`;
+      document.getElementById('jobToasts').appendChild(el);
+      new bootstrap.Toast(el, { delay: 12000 }).show();
+    }
+
+    async function pantau() {
+      let jeda = 15000;
+      try {
+        const d = await (await fetch('/jobs/aktif')).json();
+        const dipantau = baca();
+        const jalan = d.jobs.filter(j => j.status === 'running');
+        const el = document.getElementById('jobIndikator');
+        el.innerHTML = jalan.map(j => `
+          <a href="${HALAMAN[j.jenis] || '#'}" class="d-block text-decoration-none small text-warning mb-1">
+            <span class="spinner-border spinner-border-sm me-1" style="width:.7rem;height:.7rem"></span>
+            ${escapeHtml(j.label || j.jenis)} ${j.progress}% · ${j.found} lead</a>`).join('');
+        el.classList.toggle('d-none', !jalan.length);
+        d.jobs.forEach(j => {
+          if (j.status === 'running') dipantau[j.job_id] = true;
+          else if (dipantau[j.job_id]) {
+            delete dipantau[j.job_id];
+            const hasil = j.status === 'done' ? `selesai — ${j.found} lead`
+                        : j.status === 'dibatalkan' ? 'dihentikan' : 'berhenti karena error';
+            toast(`${escapeHtml(j.label || j.jenis)} ${hasil}.`,
+                  j.jenis === 'komponen' ? '/komponen/leads' : HALAMAN[j.jenis]);
+          }
+        });
+        tulis(dipantau);
+        if (jalan.length) jeda = 4000;
+      } catch (e) { /* server sedang restart — coba lagi nanti */ }
+      setTimeout(pantau, jeda);
+    }
+    pantau();
+  })();
 </script>
 {% block extra_js %}{% endblock %}
 </body>

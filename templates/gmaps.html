@@ -158,6 +158,8 @@
           <label class="form-label mb-1">Kontak yang wajib ada</label>
           <select id="modeKontak" class="form-select form-select-sm mb-2" onchange="cekFilterKetat()">
             <option value="wa" selected>Nomor HP / WhatsApp</option>
+            <option value="wa_atau_email">WhatsApp ATAU email</option>
+            <option value="wa_dan_email">WhatsApp DAN email</option>
             <option value="telepon">Telepon apa pun (termasuk kabel)</option>
             <option value="email">Email — untuk blast email</option>
             <option value="apa_saja">Salah satu ada (WA / telepon / email / sosmed)</option>
@@ -248,7 +250,7 @@
             <hr class="my-2">
             <div class="form-check form-switch">
               <input class="form-check-input" type="checkbox" id="enrichWebsite" checked
-                     onchange="hitungEstimasi()">
+                     onchange="hitungEstimasi(); cekFilterKetat()">
               <label class="form-check-label" for="enrichWebsite">
                 Buka website tiap lead (analisa jasa)
               </label>
@@ -527,7 +529,9 @@ function pakaiPreset(nama) {
 
 /** Peringatkan sebelum dijalankan kalau kombinasi filter kemungkinan besar nihil. */
 function cekFilterKetat() {
-  const mode = document.getElementById('modeKontak').value;
+  const modePilih = document.getElementById('modeKontak').value;
+  // Mode yang WAJIB email diperlakukan sama dengan "email" untuk peringatan.
+  const mode = ['email', 'wa_dan_email'].includes(modePilih) ? 'email' : modePilih;
   const tanpaWeb = document.getElementById('requireNoWebsite').checked;
   const infoEl = document.getElementById('infoKontak');
 
@@ -544,6 +548,11 @@ function cekFilterKetat() {
   } else if (mode === 'email') {
     infoEl.className = 'form-text mb-2 text-muted';
     infoEl.innerHTML = 'Email dipanen dari website bisnis saat "Periksa website" berjalan.';
+  } else if (['wa', 'wa_atau_email'].includes(mode)) {
+    infoEl.className = 'form-text mb-2 text-muted';
+    infoEl.innerHTML = document.getElementById('enrichWebsite').checked
+      ? 'Disaring saat scraping. Bisnis yang di Google Maps hanya punya telepon kantor tetap dicek — nomor WA sering tercantum di websitenya.'
+      : 'Disaring saat scraping. "Periksa website" mati: bisnis dengan telepon kantor langsung dilewati.';
   } else {
     infoEl.className = 'form-text mb-2 d-none';
     infoEl.innerHTML = '';
@@ -551,7 +560,8 @@ function cekFilterKetat() {
 
   const ketat = [];
   if (tanpaWeb) ketat.push('tanpa website');
-  if (mode === 'wa') ketat.push('wajib WhatsApp');
+  if (modePilih === 'wa') ketat.push('wajib WhatsApp');
+  if (modePilih === 'wa_dan_email') ketat.push('wajib WhatsApp & email');
   if (mode === 'email') ketat.push('wajib email');
   if (document.getElementById('filterRating').checked &&
       parseFloat(document.getElementById('minRating').value) >= 4) ketat.push('rating ≥ 4');
@@ -566,33 +576,6 @@ function cekFilterKetat() {
   } else {
     el.classList.add('d-none');
   }
-}
-
-function cekProxy(btn) {
-  const statusEl = document.getElementById('proxyStatus');
-  const asli = btn.innerHTML;
-  btn.disabled = true;
-  btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
-  statusEl.innerHTML = '<small class="text-muted">Menghubungi proxy...</small>';
-  fetch('/check-proxy', {
-    method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({
-      apify_proxy_token: document.getElementById('apifyToken').value.trim(),
-      apify_proxy_group: document.getElementById('apifyGroup').value,
-      apify_proxy_country: document.getElementById('apifyCountry').value.trim()
-    })
-  })
-  .then(r => r.json())
-  .then(d => {
-    btn.disabled = false; btn.innerHTML = asli;
-    statusEl.innerHTML = d.ok
-      ? `<small class="text-success"><i class="bi bi-check-circle-fill"></i> Proxy jalan — IP: <strong>${d.ip}</strong></small>`
-      : `<small class="text-danger"><i class="bi bi-x-circle-fill"></i> ${escapeHtml(d.error || 'Gagal')}</small>`;
-  })
-  .catch(() => {
-    btn.disabled = false; btn.innerHTML = asli;
-    statusEl.innerHTML = '<small class="text-danger">Tidak bisa menghubungi server</small>';
-  });
 }
 
 function runGmaps() {
@@ -684,6 +667,8 @@ document.addEventListener('DOMContentLoaded', () => {
   hitungEstimasi();
   cekFilterKetat();
   cekRunTerputus();
+  // Scraping berjalan di server: kembali ke halaman ini = tersambung lagi ke job-nya.
+  pulihkanJob('gmaps');
 });
 </script>
 {% endblock %}

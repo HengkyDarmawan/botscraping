@@ -39,6 +39,40 @@
   </div>
 </div>
 
+<!-- Cadangan database -->
+<div class="alert {% if backup_info %}alert-light border{% else %}alert-warning{% endif %} d-flex align-items-center gap-3 py-2 mb-4">
+  <i class="bi bi-shield-check fs-5"></i>
+  <div class="flex-grow-1 small" id="infoBackup">
+    {% if backup_info %}
+      Backup terakhir: <strong>{{ backup_info.waktu }}</strong> · {{ backup_info.ukuran }} ·
+      {{ backup_info.jumlah }} cadangan tersimpan di <code>data/backup/</code>
+    {% else %}
+      Belum ada backup database. Backup otomatis dibuat sekali sehari saat aplikasi dinyalakan.
+    {% endif %}
+  </div>
+  <button class="btn btn-outline-secondary btn-sm" id="btnBackup" onclick="backupSekarang(this)">
+    <i class="bi bi-cloud-arrow-down me-1"></i>Backup sekarang
+  </button>
+</div>
+
+<!-- Distributor komponen (database terpisah) -->
+<div class="row g-3 mb-4">
+  {% for label, nilai, warna, link, ikon in [
+      ('Lead Komponen', stats_komponen.total, '#0dcaf0', '/komponen/leads', 'cpu'),
+      ('Komponen — punya WA', stats_komponen.punya_wa, '#25d366', '/komponen/leads?wa=1', 'whatsapp'),
+      ('Komponen — punya email', stats_komponen.punya_email, '#6f42c1', '/komponen/leads?email=1', 'envelope'),
+      ('Follow-up komponen hari ini', stats_komponen.follow_up_hari_ini, '#fd7e14', '/komponen/leads?fu=1&urut=follow_up', 'alarm')] %}
+  <div class="col-6 col-md-3">
+    <a href="{{ link }}" class="text-decoration-none">
+      <div class="stat-card" style="border-left-color:{{ warna }}">
+        <div class="stat-num">{{ nilai }}</div>
+        <div class="stat-label"><i class="bi bi-{{ ikon }} me-1"></i>{{ label }}</div>
+      </div>
+    </a>
+  </div>
+  {% endfor %}
+</div>
+
 {% if stats.per_jasa %}
 <div class="card mb-4">
   <div class="card-header bg-white d-flex justify-content-between align-items-center">
@@ -113,10 +147,7 @@
       <tr>
         <td class="fw-semibold">{{ f.name }}</td>
         <td>
-          {% if f.type == 'gmaps' %}<span class="badge badge-gmaps">G-Maps</span>
-          {% elif f.type == 'pricing' %}<span class="badge badge-pricing">Pricing</span>
-          {% elif f.type == 'social' %}<span class="badge" style="background:#f3e5f5;color:#6a1b9a">Social</span>
-          {% else %}<span class="badge bg-secondary">File</span>{% endif %}
+          <span class="badge {{ f.jenis_kelas }}">{{ f.jenis_label }}</span>
         </td>
         <td>{{ f.rows }}</td>
         <td>{{ f.size }}</td>
@@ -141,4 +172,22 @@
   <p class="mt-2">Belum ada file hasil scraping. Mulai dengan memilih menu di kiri.</p>
 </div>
 {% endif %}
+{% endblock %}
+
+{% block extra_js %}
+<script>
+async function backupSekarang(btn) {
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Membuat backup...';
+  try {
+    const d = await (await fetch('/backup', { method: 'POST' })).json();
+    document.getElementById('infoBackup').innerHTML = d.ok
+      ? `Backup terakhir: <strong>${escapeHtml(d.info.waktu)}</strong> · ${escapeHtml(d.info.ukuran)} · ${d.info.jumlah} cadangan tersimpan di <code>data/backup/</code>`
+      : `<span class="text-danger">Backup gagal: ${escapeHtml(d.error)}</span>`;
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '<i class="bi bi-cloud-arrow-down me-1"></i>Backup sekarang';
+  }
+}
+</script>
 {% endblock %}

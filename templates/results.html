@@ -8,23 +8,13 @@
   {% for f in files %}
   <div class="col-12">
     <div class="file-item">
-      <div class="file-icon
-        {% if f.type == 'gmaps' %}file-type-gmaps
-        {% elif f.type == 'pricing' %}file-type-pricing
-        {% elif f.type == 'social' %}file-type-social
-        {% else %}text-secondary{% endif %}">
+      <div class="file-icon file-type-{{ f.type }}">
         <i class="bi bi-file-earmark-excel-fill"></i>
       </div>
       <div class="flex-grow-1">
         <div class="d-flex align-items-center gap-2 mb-1">
           <strong>{{ f.name }}</strong>
-          {% if f.type == 'gmaps' %}
-            <span class="badge badge-gmaps">Google Maps</span>
-          {% elif f.type == 'pricing' %}
-            <span class="badge badge-pricing">Price Comparison</span>
-          {% elif f.type == 'social' %}
-            <span class="badge" style="background:#f3e5f5;color:#6a1b9a">Social Media</span>
-          {% endif %}
+          <span class="badge {{ f.jenis_kelas }}">{{ f.jenis_label }}</span>
         </div>
         <div class="d-flex gap-3">
           <small class="text-muted"><i class="bi bi-table me-1"></i>{{ f.rows }} baris</small>

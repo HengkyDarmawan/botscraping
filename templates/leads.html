@@ -2,24 +2,35 @@
 {% block title %}Database Leads{% endblock %}
 {% block page_title %}<i class="bi bi-person-lines-fill text-primary me-2"></i>Database Leads{% endblock %}
 
+{# urlencode: nilai filter yang memuat & # + (mis. pencarian "A&B") dulu memotong
+   query string sehingga pagination & export membawa filter yang salah. #}
 {% macro qs(hal) -%}
-?hal={{ hal }}{% for k, v in args.items() %}{% if k != 'hal' %}&{{ k }}={{ v }}{% endif %}{% endfor %}
+?{{ dict(args, hal=hal)|urlencode }}
 {%- endmacro %}
 
 {% block content %}
 
+{% if kosong %}
+<div class="alert alert-warning alert-dismissible">
+  <i class="bi bi-inbox me-1"></i>Tidak ada lead yang cocok dengan filter ini — tidak ada file yang dibuat.
+  <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+</div>
+{% endif %}
+
 <!-- Ringkasan -->
 <div class="row g-3 mb-4">
-  {% for label, nilai, warna in [
-      ('Total Lead', stats.total, '#3498db'),
-      ('PANAS 🔥', stats.per_tier.get('PANAS', 0), '#e74c3c'),
-      ('Belum Dihubungi', stats.belum_dihubungi, '#f39c12'),
-      ('Follow Up Hari Ini', stats.follow_up_hari_ini, '#16a085')] %}
+  {% for label, nilai, warna, link in [
+      ('Total Lead', stats.total, '#3498db', '/leads'),
+      ('PANAS 🔥', stats.per_tier.get('PANAS', 0), '#e74c3c', '/leads?tier=PANAS'),
+      ('Belum Dihubungi', stats.belum_dihubungi, '#f39c12', '/leads?status=Belum+Dihubungi'),
+      ('Follow Up Hari Ini', stats.follow_up_hari_ini, '#16a085', '/leads?fu=1')] %}
   <div class="col-6 col-lg-3">
-    <div class="stat-card" style="border-left-color: {{ warna }}">
-      <div class="stat-num">{{ nilai }}</div>
-      <div class="stat-label">{{ label }}</div>
-    </div>
+    <a href="{{ link }}" class="text-decoration-none text-reset">
+      <div class="stat-card" style="border-left-color: {{ warna }}">
+        <div class="stat-num">{{ nilai }}</div>
+        <div class="stat-label">{{ label }}</div>
+      </div>
+    </a>
   </div>
   {% endfor %}
 </div>
@@ -85,21 +96,24 @@
           <option value="nama" {% if filters.urut == 'nama' %}selected{% endif %}>Nama A-Z</option>
         </select>
       </div>
-      <div class="col-6 col-md-3 d-flex align-items-center pt-3">
-        <div class="form-check form-switch">
-          <input class="form-check-input" type="checkbox" name="wa" value="1"
-                 id="filterWa" {% if filters.punya_wa %}checked{% endif %}>
-          <label class="form-check-label" for="filterWa" style="font-size:.85rem">Hanya yang punya WhatsApp</label>
-        </div>
+      <div class="col-6 col-md-3">
+        <label class="form-label mb-1">Kontak</label>
+        <select name="kontak" class="form-select form-select-sm">
+          {% for v, lbl in [('', 'Semua'), ('wa', 'Punya WhatsApp'), ('email', 'Punya email'),
+                            ('wa_atau_email', 'WhatsApp atau email'), ('wa_dan_email', 'WhatsApp dan email'),
+                            ('tanpa', 'Tanpa WA & email (' ~ stats.tanpa_kontak ~ ')')] %}
+          <option value="{{ v }}" {% if (filters.kontak or ('wa' if filters.punya_wa else '')) == v %}selected{% endif %}>{{ lbl }}</option>
+          {% endfor %}
+        </select>
       </div>
       <div class="col-12 col-md-5 d-flex gap-2 justify-content-md-end">
         <button type="submit" class="btn btn-primary btn-sm">
           <i class="bi bi-funnel me-1"></i>Terapkan
         </button>
         <a href="/leads" class="btn btn-outline-secondary btn-sm">Reset</a>
-        <a href="/leads/export{{ qs(1) }}" class="btn btn-success btn-sm">
-          <i class="bi bi-file-earmark-excel me-1"></i>Export Excel
-        </a>
+        <button type="button" class="btn btn-success btn-sm" onclick="bukaExport()">
+          <i class="bi bi-file-earmark-excel me-1"></i>Export (pilih kolom)
+        </button>
       </div>
     </form>
   </div>
@@ -107,14 +121,26 @@
 
 <!-- Tabel -->
 <div class="card">
-  <div class="card-header bg-white d-flex justify-content-between align-items-center">
-    <span><strong>{{ total }}</strong> lead cocok dengan filter</span>
-    <small class="text-muted">Halaman {{ halaman }} dari {{ total_halaman }}</small>
+  <div class="card-header bg-white d-flex flex-wrap gap-2 justify-content-between align-items-center">
+    <span><strong>{{ total }}</strong> lead cocok dengan filter · <span id="jmlPilih">0</span> dipilih
+      <small class="text-muted ms-2">Halaman {{ halaman }} dari {{ total_halaman }}</small></span>
+    <div class="d-flex flex-wrap gap-2">
+      <button class="btn btn-outline-secondary btn-sm" onclick="PengaturanPesan.buka()">
+        <i class="bi bi-chat-text me-1"></i>Pengaturan pesan
+      </button>
+      <button class="btn btn-outline-danger btn-sm" id="btnHapusPilih" onclick="Hapus.terpilih()" disabled>
+        <i class="bi bi-trash me-1"></i>Hapus terpilih
+      </button>
+      <button class="btn btn-outline-danger btn-sm" onclick="Hapus.semua()" {% if not total %}disabled{% endif %}>
+        <i class="bi bi-trash3 me-1"></i><span id="lblHapusSemua">Hapus semua</span>
+      </button>
+    </div>
   </div>
   <div class="table-responsive">
     <table class="table table-sm table-hover align-middle mb-0 table-results">
       <thead>
         <tr>
+          <th style="width:28px"><input type="checkbox" class="form-check-input" id="pilihSemua"></th>
           <th>Skor</th>
           <th>Bisnis</th>
           <th>Jasa yang Ditawarkan</th>
@@ -125,7 +151,8 @@
       </thead>
       <tbody>
         {% for l in leads %}
-        <tr id="row-{{ loop.index }}">
+        <tr id="row-{{ loop.index }}" data-key="{{ l.place_key }}">
+          <td><input type="checkbox" class="form-check-input pilih-baris"></td>
           <td class="text-center">
             <div class="tier-badge tier-{{ l.tier or 'ARSIP' }}">{{ l.skor_pembeli or 0 }}</div>
             <small class="text-muted" style="font-size:.65rem">{{ l.tier or '-' }}</small>
@@ -134,7 +161,7 @@
             <div class="fw-semibold">{{ l.nama_bisnis or '-' }}</div>
             <small class="text-muted">
               {{ l.kategori or '-' }}
-              {% if l.rating %} · ⭐{{ l.rating }} ({{ l.jumlah_ulasan or 0 }}){% endif %}
+              {% if l.rating %} · ⭐{{ l.rating }}{% if l.jumlah_ulasan is not none %} ({{ l.jumlah_ulasan }}){% endif %}{% endif %}
               {% if l.area_pencarian %} · {{ l.area_pencarian }}{% endif %}
             </small>
             {% if l.sudah_diklaim == 0 %}
@@ -158,7 +185,12 @@
           <td style="font-size:.8rem">
             {% if l.telepon %}<div><i class="bi bi-telephone me-1"></i>{{ l.telepon }}</div>{% endif %}
             {% if l.email %}<div><i class="bi bi-envelope me-1"></i>{{ l.email }}</div>{% endif %}
-            {% if l.instagram %}<a href="{{ l.instagram }}" target="_blank"><i class="bi bi-instagram"></i></a>{% endif %}
+            {% if l.email_lain %}<small class="text-muted d-block" title="{{ l.email_lain }}">+ email lain</small>{% endif %}
+            {% if l.whatsapp_lain %}<small class="text-muted d-block">WA lain: {{ l.whatsapp_lain }}</small>{% endif %}
+            {% for kol, ikon in [('instagram','bi-instagram'),('facebook','bi-facebook'),('tokopedia','bi-bag-check'),
+                                 ('shopee','bi-bag-heart'),('linkedin','bi-linkedin'),('youtube','bi-youtube')] %}
+              {% if l[kol] %}<a href="{{ l[kol] }}" target="_blank" class="me-1" title="{{ kol|capitalize }}"><i class="bi {{ ikon }}"></i></a>{% endif %}
+            {% endfor %}
             {% if l.website %}<a href="{{ l.website }}" target="_blank" class="ms-1"><i class="bi bi-globe"></i></a>{% endif %}
           </td>
           <td>
@@ -182,16 +214,22 @@
               <i class="bi bi-whatsapp"></i> Chat
             </a>
             {% endif %}
+            <button class="btn btn-outline-primary btn-sm mb-1 btn-pesan"
+                    title="Template email & WhatsApp siap salin, plus tandai terkirim">
+              <i class="bi bi-envelope-paper"></i> Email/WA
+            </button>
             {% if l.source_url and l.source_url.startswith('http') %}
             <a href="{{ l.source_url }}" target="_blank" class="btn btn-outline-secondary btn-sm mb-1"
                title="Buka di Google Maps"><i class="bi bi-geo-alt"></i></a>
             {% endif %}
             <button class="btn btn-outline-primary btn-sm mb-1"
-                    onclick="lihatDetail('{{ l.place_key }}')" title="Detail"><i class="bi bi-eye"></i></button>
+                    onclick="lihatDetail(this.closest('tr').dataset.key)" title="Detail"><i class="bi bi-eye"></i></button>
+            <button class="btn btn-outline-danger btn-sm mb-1 btn-hapus" title="Hapus lead ini">
+              <i class="bi bi-trash"></i></button>
           </td>
         </tr>
         {% else %}
-        <tr><td colspan="6" class="text-center text-muted py-5">
+        <tr><td colspan="7" class="text-center text-muted py-5">
           Belum ada lead yang cocok. Jalankan
           <a href="/gmaps">Google Maps Scraper</a> dulu, atau longgarkan filternya.
         </td></tr>
@@ -212,6 +250,99 @@
   {% endif %}
 </div>
 
+<!-- Pengaturan pesan -->
+<div class="modal fade" id="pesanModal" tabindex="-1">
+  <div class="modal-dialog modal-xl modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="bi bi-chat-text me-2"></i>Pengaturan Pesan — Klien Website</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="row g-2 mb-3">
+          <div class="col-md-3"><label class="form-label mb-1">Nama Anda</label>
+            <input class="form-control form-control-sm pp" data-k="pengirim"></div>
+          <div class="col-md-3"><label class="form-label mb-1">Nama usaha / brand</label>
+            <input class="form-control form-control-sm pp" data-k="usaha"></div>
+          <div class="col-md-3"><label class="form-label mb-1">Nomor WA Anda</label>
+            <input class="form-control form-control-sm pp" data-k="wa_pengirim" placeholder="08xx"></div>
+          <div class="col-md-3"><label class="form-label mb-1">Email Anda</label>
+            <input class="form-control form-control-sm pp" data-k="email_pengirim"></div>
+          <div class="col-md-3"><label class="form-label mb-1">Follow-up 1 (hari setelah kirim)</label>
+            <input type="number" min="1" class="form-control form-control-sm pp" data-k="fu1_hari"></div>
+          <div class="col-md-3"><label class="form-label mb-1">Follow-up 2 (hari setelah kirim)</label>
+            <input type="number" min="1" class="form-control form-control-sm pp" data-k="fu2_hari"></div>
+        </div>
+        <div class="alert alert-light border py-2 small mb-3" id="ppPlaceholder"></div>
+        <div class="row g-3">
+          <div class="col-md-6">
+            <label class="form-label mb-1">Subject email pembuka</label>
+            <input class="form-control form-control-sm pp mb-2" data-k="tpl_email_subject">
+            <label class="form-label mb-1">Email pembuka</label>
+            <textarea class="form-control form-control-sm font-monospace pp" data-k="tpl_email" rows="12"></textarea>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label mb-1">WhatsApp pembuka</label>
+            <textarea class="form-control form-control-sm font-monospace pp mb-2" data-k="tpl_wa" rows="5"></textarea>
+            <label class="form-label mb-1">Follow-up H+3 (balasan di thread yang sama)</label>
+            <textarea class="form-control form-control-sm font-monospace pp mb-2" data-k="tpl_fu1" rows="5"></textarea>
+            <label class="form-label mb-1">Follow-up H+7 (terakhir)</label>
+            <textarea class="form-control form-control-sm font-monospace pp" data-k="tpl_fu2" rows="5"></textarea>
+          </div>
+        </div>
+        <div id="ppGalat" class="text-danger small mt-2"></div>
+      </div>
+      <div class="modal-footer">
+        <span id="ppStatus" class="small text-muted me-auto"></span>
+        <button class="btn btn-primary" onclick="PengaturanPesan.simpan()">Simpan</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Konfirmasi hapus -->
+<div class="modal fade" id="hapusModal" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header bg-danger text-white">
+        <h5 class="modal-title"><i class="bi bi-trash me-2"></i>Hapus lead</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <p id="hpInfo" class="mb-3"></p>
+        <div class="form-check mb-2">
+          <input class="form-check-input" type="checkbox" id="hpJangan">
+          <label class="form-check-label" for="hpJangan">
+            <strong>Jangan ambil lagi</strong> saat scraping berikutnya
+            <div class="form-text" style="font-size:.75rem">Cocok untuk hasil yang salah (mis. gedung mal,
+              bukan toko). Tanpa centang ini, bisnisnya boleh muncul lagi kalau di-scrape ulang.</div>
+          </label>
+        </div>
+        <div id="hpSemua" class="d-none">
+          <div class="form-check mb-3">
+            <input class="form-check-input" type="checkbox" id="hpLewati">
+            <label class="form-check-label" for="hpLewati">
+              Kosongkan juga daftar bisnis yang dilewati
+              <div class="form-text" style="font-size:.75rem">Bisnis tutup / tanpa kontak yang dulu disaring
+                akan dicek ulang di scraping berikutnya (reset total).</div>
+            </label>
+          </div>
+          <label class="form-label mb-1" for="hpKonfirmasi">Ketik <code>HAPUS</code> untuk konfirmasi</label>
+          <input class="form-control" id="hpKonfirmasi" autocomplete="off">
+        </div>
+        <div class="form-text mt-2" style="font-size:.75rem">
+          Nomor surat &amp; file proposal yang sudah dibuat tidak ikut terhapus, supaya nomornya tidak dipakai ulang.
+        </div>
+        <div id="hpGalat" class="text-danger small mt-2"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline-secondary" data-bs-dismiss="modal">Batal</button>
+        <button class="btn btn-danger" id="hpJalan"><i class="bi bi-trash me-1"></i>Hapus</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- Modal detail -->
 <div class="modal fade" id="detailModal" tabindex="-1">
   <div class="modal-dialog modal-lg modal-dialog-scrollable">
@@ -227,7 +358,21 @@
 {% endblock %}
 
 {% block extra_js %}
+<script src="/static/js/export-picker.js"></script>
+<script src="/static/js/email-popup.js"></script>
 <script>
+const FILTER_AKTIF = {{ args|tojson }};
+
+function bukaExport() {
+  ExportPicker.buka({
+    kunci: 'webdev',
+    katalogUrl: '/leads/export/kolom',
+    exportUrl: '/leads/export',
+    payload: () => ({ filter: FILTER_AKTIF }),
+    info: () => `<i class="bi bi-funnel me-1"></i>Mengekspor <strong>semua {{ total }}</strong> lead yang cocok dengan filter aktif.`,
+  });
+}
+
 const LABEL = {
   skor_pembeli: 'Skor pembeli', tier: 'Tier', jasa_utama: 'Jasa utama',
   jasa_pendukung: 'Jasa pendukung', alasan_pitch: 'Kalimat pembuka',
@@ -242,6 +387,94 @@ const LABEL = {
   area_pencarian: 'Area', instagram: 'Instagram', facebook: 'Facebook'
 };
 
+function barisDari(el) { return el.closest('tr[data-key]'); }
+function kunciTerpilih() {
+  return [...document.querySelectorAll('.pilih-baris:checked')].map(c => barisDari(c).dataset.key);
+}
+function hitungPilih() {
+  const n = kunciTerpilih().length;
+  document.getElementById('jmlPilih').textContent = n;
+  const bh = document.getElementById('btnHapusPilih');
+  bh.disabled = !n;
+  bh.innerHTML = `<i class="bi bi-trash me-1"></i>Hapus terpilih${n ? ' (' + n + ')' : ''}`;
+}
+document.getElementById('pilihSemua').addEventListener('change', e => {
+  document.querySelectorAll('.pilih-baris').forEach(c => c.checked = e.target.checked);
+  hitungPilih();
+});
+document.querySelectorAll('.pilih-baris').forEach(c => c.addEventListener('change', hitungPilih));
+
+// ─── Hapus ──────────────────────────────────────────────────────────────────
+const Hapus = (() => {
+  const TOTAL = {{ total }};
+  // Filter aktif = parameter apa pun selain urutan. Tanpa filter, "hapus semua"
+  // benar-benar menghapus seluruh lead komponen.
+  const adaFilter = Object.keys(FILTER_AKTIF).some(k => k !== 'urut' && FILTER_AKTIF[k]);
+  if (adaFilter) document.getElementById('lblHapusSemua').textContent = `Hapus ${TOTAL} lead sesuai filter`;
+  let modal = null, mode = null, keys = [];
+
+  function buka(m, k, info) {
+    mode = m; keys = k;
+    document.getElementById('hpInfo').innerHTML = info;
+    document.getElementById('hpJangan').checked = m !== 'semua';
+    document.getElementById('hpSemua').classList.toggle('d-none', m !== 'semua');
+    document.getElementById('hpLewati').checked = false;
+    document.getElementById('hpKonfirmasi').value = '';
+    document.getElementById('hpGalat').textContent = '';
+    modal = modal || new bootstrap.Modal(document.getElementById('hapusModal'));
+    modal.show();
+  }
+
+  function satu(key) {
+    const nama = document.querySelector(`tr[data-key="${CSS.escape(key)}"] .fw-semibold`).textContent.trim();
+    buka('keys', [key], `Hapus <strong>${escapeHtml(nama)}</strong> dari Database Leads?`);
+  }
+  function terpilih() {
+    const k = kunciTerpilih();
+    if (k.length) buka('keys', k, `Hapus <strong>${k.length}</strong> lead yang dicentang?`);
+  }
+  function semua() {
+    buka('semua', [], adaFilter
+      ? `Hapus <strong>semua ${TOTAL} lead</strong> yang cocok dengan filter aktif (bukan hanya halaman ini)?`
+      : `Hapus <strong>SELURUH ${TOTAL} lead klien website</strong>? Database leads akan kosong.`);
+  }
+
+  async function jalankan() {
+    const btn = document.getElementById('hpJalan');
+    const galat = document.getElementById('hpGalat');
+    const body = { jangan_ambil_lagi: document.getElementById('hpJangan').checked };
+    if (mode === 'semua') {
+      body.filter = FILTER_AKTIF;
+      body.konfirmasi = document.getElementById('hpKonfirmasi').value;
+      body.kosongkan_lewati = document.getElementById('hpLewati').checked;
+      if (body.konfirmasi.trim().toUpperCase() !== 'HAPUS') { galat.textContent = 'Ketik HAPUS untuk konfirmasi.'; return; }
+    } else {
+      body.keys = keys;
+    }
+    btn.disabled = true;
+    try {
+      const d = await (await fetch('/leads/hapus', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+      })).json();
+      if (!d.ok) { galat.textContent = d.error || 'Gagal menghapus.'; return; }
+      if (mode === 'semua') { window.location = '/leads'; return; }
+      keys.forEach(k => document.querySelector(`tr[data-key="${CSS.escape(k)}"]`)?.remove());
+      document.getElementById('pilihSemua').checked = false;
+      hitungPilih();
+      modal.hide();
+      if (!document.querySelector('tr[data-key]')) window.location.reload();
+    } catch (e) {
+      galat.textContent = 'Tidak bisa menghubungi server.';
+    } finally {
+      btn.disabled = false;
+    }
+  }
+  document.getElementById('hpJalan').addEventListener('click', jalankan);
+  document.querySelectorAll('.btn-hapus').forEach(b => b.addEventListener('click', () => satu(barisDari(b).dataset.key)));
+  return { terpilih, semua };
+})();
+
+
 function simpanLead(placeKey, el, field) {
   const body = { place_key: placeKey };
   body[field] = el.value;
@@ -254,6 +487,8 @@ function simpanLead(placeKey, el, field) {
   .then(d => {
     el.classList.remove('border-warning');
     el.classList.add(d.ok ? 'border-success' : 'border-danger');
+    // Status kirim mengisi jadwal follow-up otomatis — tampilkan di baris.
+    if (d.ok) perbaruiBaris(placeKey, d);
     setTimeout(() => el.classList.remove('border-success', 'border-danger'), 1200);
   })
   .catch(() => {
@@ -261,6 +496,44 @@ function simpanLead(placeKey, el, field) {
     el.classList.add('border-danger');
   });
 }
+
+/** Status & jadwal terbaru dari server → tampilkan di baris tabel. */
+function perbaruiBaris(key, d) {
+  const tr = document.querySelector(`tr[data-key="${CSS.escape(key)}"]`);
+  if (!tr) return;
+  const st = tr.querySelector('select');
+  if (st && d.status) st.value = d.status;
+  const tgl = tr.querySelector('input[type="date"]');
+  if (tgl && d.tanggal_follow_up !== undefined) tgl.value = d.tanggal_follow_up || '';
+}
+
+document.querySelectorAll('.btn-pesan').forEach(b => b.addEventListener('click', () =>
+  EmailPopup.buka(barisDari(b).dataset.key, perbaruiBaris,
+                  { pesanUrl: '/leads/pesan/', statusUrl: '/leads/update', lampiran: false })));
+
+const PengaturanPesan = (() => {
+  let modal = null;
+  async function buka() {
+    const d = await (await fetch('/leads/pengaturan-pesan')).json();
+    document.querySelectorAll('#pesanModal .pp').forEach(el => el.value = d.pengaturan[el.dataset.k] ?? '');
+    document.getElementById('ppPlaceholder').innerHTML = '<strong>Bisa dipakai di template:</strong> ' +
+      Object.entries(d.placeholder).map(([k, v]) => `<code>{${escapeHtml(k)}}</code> ${escapeHtml(v)}`).join(' · ');
+    document.getElementById('ppGalat').textContent = '';
+    document.getElementById('ppStatus').textContent = '';
+    modal = modal || new bootstrap.Modal(document.getElementById('pesanModal'));
+    modal.show();
+  }
+  async function simpan() {
+    const body = {};
+    document.querySelectorAll('#pesanModal .pp').forEach(el => body[el.dataset.k] = el.value);
+    const d = await (await fetch('/leads/pengaturan-pesan', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+    })).json();
+    if (!d.ok) { document.getElementById('ppGalat').textContent = d.error; return; }
+    document.getElementById('ppStatus').textContent = '✓ Tersimpan. Tombol Chat WA memakai teks baru setelah halaman dimuat ulang.';
+  }
+  return { buka, simpan };
+})();
 
 function lihatDetail(placeKey) {
   const modal = new bootstrap.Modal(document.getElementById('detailModal'));

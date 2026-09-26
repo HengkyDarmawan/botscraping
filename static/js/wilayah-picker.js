@@ -57,9 +57,13 @@ function muatWilayah() {
   });
 }
 
-/** Daftar jenis bisnis yang sudah diratakan dari pustaka keyword. */
-function muatKeywords() {
-  return _muatSekali('keywords', '/api/keywords', data => {
+/**
+ * Daftar jenis bisnis yang sudah diratakan dari pustaka keyword.
+ * `url` memilih pustakanya: /api/keywords (klien website) atau
+ * /api/keywords-komponen (calon pembeli komponen komputer).
+ */
+function muatKeywords(url = '/api/keywords') {
+  return _muatSekali('keywords:' + url, url, data => {
     const daftar = [];
     (data.sektor || []).forEach(s => {
       (s.keywords || []).forEach(k => {
@@ -489,7 +493,11 @@ class WilayahPicker extends ChipPicker {
 /* ─── Pemilih jenis bisnis ────────────────────────────────────────────────── */
 
 class KeywordPicker extends ChipPicker {
-  _muat() { return muatKeywords(); }
+  // Sumber pustaka dari atribut data-sumber pada elemen host. Dibaca dari DOM,
+  // bukan dari field kelas, karena _isiPanel sudah dipanggil di constructor
+  // kelas dasar sebelum field turunan sempat diisi.
+  get _sumber() { return (this.host && this.host.dataset.sumber) || '/api/keywords'; }
+  _muat() { return muatKeywords(this._sumber); }
   get placeholderSiap() { return 'Ketik jenis bisnis, atau pilih dari pustaka...'; }
   get placeholderMuat() { return 'Memuat pustaka jenis bisnis...'; }
   get namaSatuan() { return 'jenis bisnis'; }
@@ -503,7 +511,7 @@ class KeywordPicker extends ChipPicker {
   _isiPanel() {
     // Panel baru bisa disusun setelah pustakanya datang; promise-nya dikembalikan
     // supaya kelas dasar tahu kapan tombol "Pintasan lainnya" boleh ditampilkan.
-    return muatKeywords().then(d => {
+    return muatKeywords(this._sumber).then(d => {
       [...new Set(d.map(x => x.sektor))].forEach(nama => {
         const isi = d.filter(x => x.sektor === nama);
         this._grup(nama, [{

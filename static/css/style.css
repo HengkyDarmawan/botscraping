@@ -166,6 +166,10 @@ body { margin: 0; background: #f0f4f8; font-family: 'Segoe UI', sans-serif; }
 .tier-HANGAT { background: #fff2cc; color: #8a6d1a; }
 .tier-DINGIN { background: #edf2f7; color: #55606e; }
 .tier-ARSIP  { background: #f2f2f2; color: #888; }
+/* Prioritas lead komponen */
+.tier-Tinggi { background: #ffd6d6; color: #922; }
+.tier-Sedang { background: #fff2cc; color: #8a6d1a; }
+.tier-Rendah { background: #edf2f7; color: #55606e; }
 .tier-badge { font-weight: 700; border-radius: 10px; padding: 2px 9px; font-size: .72rem; }
 
 /* Posisi harga — bentuk yang sama seperti .tier-* di atas: pil berisi angka,
@@ -193,6 +197,10 @@ body { margin: 0; background: #f0f4f8; font-family: 'Segoe UI', sans-serif; }
 .file-type-gmaps { color: #2e7d32; }
 .file-type-pricing { color: #1565c0; }
 .file-type-social { color: #6a1b9a; }
+.file-type-komponen, .file-type-komponen-export { color: #0b7285; }
+.file-type-leads, .file-type-webslead { color: #2e7d32; }
+.badge-komponen { background: #e3fafc; color: #0b7285; }
+.badge-social { background: #f3e5f5; color: #6a1b9a; }
 
 /* Responsive */
 @media (max-width: 768px) {

@@ -14,14 +14,21 @@ from pathlib import Path
 from flask import (Flask, Response, abort, jsonify, redirect, render_template,
                    request, send_file, url_for)
 
-import db
+# Semua path di proyek ini (data/, output/, dokumen/, config) relatif terhadap
+# folder proyek. Tanpa ini, menjalankan `python botscraping/app.py` dari folder
+# lain membuat database kosong baru di tempat yang salah dan lead "hilang".
+BASE_DIR = Path(__file__).resolve().parent
+os.chdir(BASE_DIR)
+
+import config  # noqa: E402
+import db  # noqa: E402
 
 app = Flask(__name__)
 app.secret_key = "leadscraper-2024-secret"
 
-OUTPUT_DIR = Path("output")
+OUTPUT_DIR = BASE_DIR / "output"
 OUTPUT_DIR.mkdir(exist_ok=True)
-DATA_DIR = Path("data")
+DATA_DIR = BASE_DIR / "data"
 
 # Status semua job scraping yang sedang/pernah berjalan
 # Format: {job_id: {"status", "progress", "log", "found", "filename", "error", "cancel"}}
@@ -46,6 +53,8 @@ _SUMBER_DIPANTAU = (
     "scrapers/mp_common.py", "scrapers/mp_session.py", "scrapers/mp_endpoints.py",
     "scrapers/mp_lexicon.py", "scrapers/mp_match.py", "scrapers/mp_harga.py",
     "scrapers/mp_cari.py", "scrapers/gmaps.py", "scrapers/scoring.py",
+    "scrapers/enrich.py", "scrapers/komponen.py", "scrapers/dokumen_isb.py",
+    "db_komponen.py", "komponen_routes.py", "ekspor.py",
 )
 
 
@@ -68,6 +77,14 @@ def _inject_kode_basi():
 
 
 db.init_db()
+# Saat start tidak ada run yang berjalan: lead "menunggu cek website" dari run
+# yang mati di tengah jalan aman dibersihkan (diambil ulang di run berikutnya).
+db.bersihkan_tertunda()
+
+import backup  # noqa: E402
+
+# Database tidak lagi ada di git — cadangan harian dibuat saat app dinyalakan.
+backup.backup_harian_latar()
 
 
 # ─── Helper job ───────────────────────────────────────────────────────────────
@@ -132,9 +149,17 @@ def _terima_should_stop(fungsi):
         return False
 
 
-def _jalankan(job_id, fungsi, params, label):
-    """Pola bersama semua scraper: jalankan di thread, laporkan lewat SSE."""
+def _jalankan(job_id, fungsi, params, label, jenis=""):
+    """
+    Pola bersama semua scraper: jalankan di thread, laporkan lewat SSE.
+
+    `jenis` (mis. "komponen", "gmaps") membuat job bisa ditemukan lagi lewat
+    /jobs/aktif — halaman yang dibuka ulang setelah user pindah menu menyambung
+    kembali ke job yang masih berjalan, bukan menampilkan form kosong.
+    """
     bisa_stop = _terima_should_stop(fungsi)
+    if job_id in jobs:
+        jobs[job_id].update(bisa_stop=bisa_stop, jenis=jenis, label=label)
 
     def run():
         def cb(pct, msg, found=0):
@@ -165,6 +190,39 @@ def _jalankan(job_id, fungsi, params, label):
     threading.Thread(target=run, daemon=True).start()
 
 
+# Job yang sudah selesai masih dilaporkan /jobs/aktif selama ini, supaya user
+# yang kembali ke halaman scraper tetap melihat hasil & tombol download-nya.
+TAMPIL_JOB_SELESAI = 15 * 60
+
+
+def job_berjalan(jenis):
+    """job_id scraping `jenis` yang masih berjalan, atau None."""
+    for jid, j in jobs.items():
+        if j.get("jenis") == jenis and j["status"] == "running":
+            return jid
+    return None
+
+
+@app.route("/jobs/aktif")
+def jobs_aktif():
+    """Job yang sedang berjalan (dan yang baru selesai) untuk disambung ulang UI."""
+    jenis = request.args.get("jenis") or None
+    sekarang = time.time()
+    hasil = []
+    for jid, j in list(jobs.items()):
+        if not j.get("jenis") or (jenis and j.get("jenis") != jenis):
+            continue
+        if j["status"] != "running" and                 sekarang - j.get("selesai_pada", sekarang) > TAMPIL_JOB_SELESAI:
+            continue
+        hasil.append({"job_id": jid, "jenis": j.get("jenis"), "label": j.get("label"),
+                      "status": j["status"], "progress": j["progress"],
+                      "found": j["found"], "filename": j["filename"],
+                      "mulai_pada": j.get("mulai_pada"),
+                      "selesai_pada": j.get("selesai_pada")})
+    hasil.sort(key=lambda x: x["mulai_pada"] or 0, reverse=True)
+    return jsonify({"jobs": hasil})
+
+
 @app.route("/job/<job_id>/stop", methods=["POST"])
 def job_stop(job_id):
     """
@@ -174,6 +232,11 @@ def job_stop(job_id):
     j = jobs.get(job_id)
     if not j:
         return jsonify({"ok": False, "error": "Job tidak ditemukan"}), 404
+    if not j.get("bisa_stop", True):
+        # Dulu Stop pada scraper seperti ini tetap "diterima", prosesnya jalan
+        # terus sampai selesai, lalu hasilnya dilabeli "dibatalkan".
+        return jsonify({"ok": False, "error": "Scraper ini tidak bisa dihentikan di "
+                                              "tengah jalan — tunggu sampai selesai."})
     j["cancel"].set()
     _update(job_id, message="⏹ Perintah berhenti diterima...")
     return jsonify({"ok": True})
@@ -207,25 +270,73 @@ def stream(job_id):
 
 # ─── Dashboard ────────────────────────────────────────────────────────────────
 
+# Jumlah baris & kolom tiap file hasil, di-cache per (nama, mtime). Dulu SETIAP
+# buka dashboard/hasil membaca seluruh isi semua xlsx dengan pandas — makin lama
+# dipakai, makin lambat halamannya.
+_info_berkas = {}
+
+
+def _info_xlsx(f):
+    kunci = (f.name, f.stat().st_mtime)
+    if kunci not in _info_berkas:
+        try:
+            from openpyxl import load_workbook
+            wb = load_workbook(f, read_only=True)
+            ws = wb.worksheets[0]
+            kepala = next(ws.iter_rows(min_row=1, max_row=1, values_only=True), ())
+            _info_berkas[kunci] = (max((ws.max_row or 1) - 1, 0),
+                                   [str(c) for c in kepala if c is not None][:6])
+            wb.close()
+        except Exception:
+            _info_berkas[kunci] = ("?", [])
+    return _info_berkas[kunci]
+
+
+# Jenis file hasil dari awalan namanya → (label, kelas CSS badge).
+JENIS_BERKAS = {
+    "gmaps": ("Google Maps", "badge-gmaps"),
+    "leads": ("Export Leads Web", "badge-gmaps"),
+    "webslead": ("Website Leads", "badge-gmaps"),
+    "social": ("Social Media", "badge-social"),
+    "pricing": ("Price Comparison", "badge-pricing"),
+    "komponen": ("Komponen", "badge-komponen"),
+    "komponen-export": ("Export Komponen", "badge-komponen"),
+}
+
+
+def _jenis(nama):
+    awalan = nama.split("_")[0]
+    label, kelas = JENIS_BERKAS.get(awalan, ("File", "bg-secondary"))
+    return {"type": awalan, "jenis_label": label, "jenis_kelas": kelas}
+
+
 @app.route("/")
 def dashboard():
-    import pandas as pd
     files = sorted(OUTPUT_DIR.glob("*.xlsx"), key=lambda f: f.stat().st_mtime, reverse=True)[:8]
     recent = []
     for f in files:
-        try:
-            df = pd.read_excel(f)
-            rows = len(df)
-        except Exception:
-            rows = "?"
+        rows, _ = _info_xlsx(f)
         recent.append({
             "name": f.name,
             "rows": rows,
             "date": datetime.fromtimestamp(f.stat().st_mtime).strftime("%d %b %Y %H:%M"),
             "size": f"{max(f.stat().st_size // 1024, 1)} KB",
-            "type": f.name.split("_")[0],
+            **_jenis(f.name),
         })
-    return render_template("dashboard.html", recent=recent, stats=db.stats())
+    import db_komponen
+    return render_template("dashboard.html", recent=recent, stats=db.stats(),
+                           stats_komponen=db_komponen.stats(),
+                           backup_info=backup.terakhir())
+
+
+@app.route("/backup", methods=["POST"])
+def backup_sekarang():
+    """Backup manual kedua database (tombol di Dashboard)."""
+    try:
+        backup.buat_backup()
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"{type(e).__name__}: {e}"}), 500
+    return jsonify({"ok": True, "info": backup.terakhir()})
 
 
 # ─── Data pemilih target (wilayah & jenis bisnis) ─────────────────────────────
@@ -273,7 +384,7 @@ def gmaps():
 def gmaps_run():
     from scrapers.gmaps import run_scrape
     job_id = _new_job()
-    _jalankan(job_id, run_scrape, request.json, "Scraping")
+    _jalankan(job_id, run_scrape, request.json, "Scraping Google Maps", jenis="gmaps")
     return jsonify({"job_id": job_id})
 
 
@@ -334,7 +445,7 @@ def gmaps_lanjutkan():
 
     from scrapers.gmaps import run_scrape
     job_id = _new_job()
-    _jalankan(job_id, run_scrape, params, "Lanjutan scraping")
+    _jalankan(job_id, run_scrape, params, "Lanjutan scraping Google Maps", jenis="gmaps")
     return jsonify({"ok": True, "job_id": job_id, "sisa_target": len(sisa)})
 
 
@@ -489,7 +600,10 @@ def pricing_cari_toko():
     dan tombol Stop ikut hidup.
     """
     from scrapers.mp_cari import cari_produk
-    job_id = uuid.uuid4().hex[:8]
+    # Lewat _new_job: dulu job_id dibuat dengan uuid saja sehingga tidak pernah
+    # masuk `jobs` — stream menjawab "Job tidak ditemukan", progres tidak pernah
+    # tampil, dan tombol Stop mengembalikan 404.
+    job_id = _new_job()
     _jalankan(job_id, cari_produk, request.json or {}, "Cari di toko")
     return jsonify({"job_id": job_id})
 
@@ -626,7 +740,7 @@ def check_gemini():
         from google import genai
         client = genai.Client(api_key=api_key)
         resp = client.models.generate_content(
-            model="gemini-2.0-flash",
+            model=config.GEMINI_MODEL,
             contents="Balas hanya dengan kata: OK"
         )
         return jsonify({"ok": True, "reply": (resp.text or "").strip()})
@@ -651,18 +765,32 @@ def website_leads_run():
 
 # ─── CRM: database leads ──────────────────────────────────────────────────────
 
-STATUS_PILIHAN = ["Belum Dihubungi", "Sudah Dihubungi", "Follow Up",
-                  "Deal", "Tidak Tertarik"]
+STATUS_PILIHAN = [
+    "Belum Dihubungi", "WA Terkirim", "Email Terkirim", "Follow-up 1", "Follow-up 2",
+    "Membalas", "Minta Penawaran", "Deal", "Tidak Tertarik", "Jangan Hubungi",
+    # Status lama — tetap bisa dipilih supaya lead yang sudah memakainya terbaca.
+    "Sudah Dihubungi", "Follow Up",
+]
 
 
-def _filter_dari_request():
-    """Baca filter dari query string. String kosong dianggap 'tanpa filter'."""
+def _pengaturan_pesan():
+    from scrapers import pesan_web
+    return db.pengaturan(dict(pesan_web.BAWAAN, fu1_hari="3", fu2_hari="7"))
+
+
+def _filter_dari_request(sumber=None):
+    """
+    Baca filter dari query string (atau dict `sumber`, mis. body JSON export).
+    String kosong dianggap 'tanpa filter'.
+    """
+    a = request.args if sumber is None else sumber
+
     def s(nama):
-        v = (request.args.get(nama) or "").strip()
+        v = str(a.get(nama) or "").strip()
         return v or None
 
     def i(nama):
-        v = (request.args.get(nama) or "").strip()
+        v = str(a.get(nama) or "").strip()
         try:
             return int(v) if v else None
         except ValueError:
@@ -673,36 +801,41 @@ def _filter_dari_request():
         "jasa_utama": s("jasa"),
         "area": s("area"),
         "status_leads": s("status"),
-        "punya_wa": request.args.get("wa") == "1",
+        "punya_wa": str(a.get("wa")) == "1",
         "skor_min": i("skor_min"),
         "skor_max": i("skor_max"),
         "q": s("q"),
         "run": s("run"),
-        "urut": request.args.get("urut") or "skor_pembeli",
+        "kontak": s("kontak"),
+        "follow_up": str(a.get("fu")) == "1",
+        "urut": a.get("urut") or "skor_pembeli",
     }
 
 
 @app.route("/leads")
 def leads():
-    import config as cfg
-    from scrapers.scoring import URUTAN_TIER, pesan_wa
+    from urllib.parse import quote
+
+    from scrapers import pesan_web
+    from scrapers.scoring import URUTAN_TIER
 
     filters = _filter_dari_request()
     per_halaman = 50
-    halaman = max(int(request.args.get("hal", 1) or 1), 1)
+    try:
+        halaman = max(int(request.args.get("hal", 1) or 1), 1)
+    except ValueError:
+        halaman = 1
 
     rows, total = db.query_leads(**filters, limit=per_halaman,
                                  offset=(halaman - 1) * per_halaman)
 
     # Siapkan tautan WhatsApp berisi pesan pembuka yang sudah dirakit per lead —
-    # inilah yang mengubah tabel data jadi alat penjualan.
-    template = getattr(cfg, "PESAN_TEMPLATE", "")
-    pengirim = getattr(cfg, "PESAN_PENGIRIM", "")
-    usaha = getattr(cfg, "PESAN_USAHA", "")
+    # inilah yang mengubah tabel data jadi alat penjualan. Teksnya dari template
+    # yang diedit user di "Pengaturan pesan".
+    atur = _pengaturan_pesan()
     for r in rows:
         if r.get("whatsapp_link"):
-            from urllib.parse import quote
-            pesan = pesan_wa(r, pengirim=pengirim, usaha=usaha, template=template)
+            pesan = pesan_web.isi_pesan(r, atur)["wa"]["isi"]
             r["wa_pitch"] = r["whatsapp_link"].split("?")[0] + "?text=" + quote(pesan)
         else:
             r["wa_pitch"] = ""
@@ -711,13 +844,46 @@ def leads():
     return render_template(
         "leads.html",
         leads=rows, total=total, halaman=halaman, total_halaman=total_halaman,
-        filters=filters, args=request.args,
+        filters=filters,
+        args={k: v for k, v in request.args.items() if k not in ("hal", "kosong")},
         opsi_tier=[t for t in URUTAN_TIER],
         opsi_jasa=db.nilai_unik("jasa_utama"),
         opsi_area=db.nilai_unik("area_pencarian"),
         opsi_status=STATUS_PILIHAN,
         stats=db.stats(),
+        kosong=request.args.get("kosong") == "1",
     )
+
+
+@app.route("/leads/hapus", methods=["POST"])
+def leads_hapus():
+    """
+    Hapus lead klien website: `keys` (per baris / terpilih), atau semua lead yang
+    cocok dengan `filter` (wajib ketik HAPUS). Tanpa filter = seluruh isi
+    database, termasuk baris tersembunyi.
+    """
+    d = request.json or {}
+    jangan = bool(d.get("jangan_ambil_lagi"))
+    if d.get("keys"):
+        n = db.hapus_leads(d["keys"], jangan_ambil_lagi=jangan)
+        return jsonify({"ok": True, "terhapus": n, "stats": db.stats()})
+
+    if (d.get("konfirmasi") or "").strip().upper() != "HAPUS":
+        return jsonify({"ok": False, "error": "Ketik HAPUS untuk konfirmasi."}), 400
+    if job_berjalan("gmaps"):
+        return jsonify({"ok": False, "error": "Scraping Google Maps sedang berjalan. "
+                                              "Hentikan atau tunggu selesai dulu."}), 409
+    filters = _filter_dari_request(d.get("filter") or {})
+    ada_filter = any(v for k, v in filters.items() if k != "urut")
+    if ada_filter:
+        rows, _ = db.query_leads(**filters, limit=0)
+        keys = [r["place_key"] for r in rows]
+    else:
+        keys = db.semua_keys()
+    lewati = db.kosongkan_lewati() if d.get("kosongkan_lewati") else 0
+    n = db.hapus_leads(keys, jangan_ambil_lagi=jangan)
+    return jsonify({"ok": True, "terhapus": n, "lewati_dikosongkan": lewati,
+                    "stats": db.stats()})
 
 
 @app.route("/leads/update", methods=["POST"])
@@ -726,13 +892,53 @@ def leads_update():
     place_key = data.get("place_key")
     if not place_key:
         return jsonify({"ok": False, "error": "place_key kosong"}), 400
-    ok = db.update_status(
-        place_key,
-        status_leads=data.get("status_leads"),
-        catatan=data.get("catatan"),
-        tanggal_follow_up=data.get("tanggal_follow_up"),
-    )
-    return jsonify({"ok": ok})
+    status = data.get("status", data.get("status_leads"))
+    if status is not None and status not in STATUS_PILIHAN:
+        return jsonify({"ok": False, "error": "Status tidak dikenal"}), 400
+    atur = _pengaturan_pesan()
+    # "WA/Email Terkirim" & "Follow-up 1" mengisi jadwal follow-up otomatis.
+    row = db.update_crm(place_key, status=status, catatan=data.get("catatan"),
+                        tanggal_follow_up=data.get("tanggal_follow_up"),
+                        nama_pic=data.get("nama_pic"),
+                        fu1_hari=atur["fu1_hari"], fu2_hari=atur["fu2_hari"])
+    if not row:
+        return jsonify({"ok": False, "error": "Lead tidak ditemukan"}), 404
+    return jsonify({"ok": True, "status": row.get("status_leads"),
+                    "tanggal_follow_up": row.get("tanggal_follow_up") or "",
+                    "tanggal_dihubungi": row.get("tanggal_dihubungi") or ""})
+
+
+@app.route("/leads/pesan/<path:place_key>")
+def leads_pesan(place_key):
+    """Template WA & email yang sudah terisi untuk satu lead (popup salin)."""
+    from scrapers import kontak, pesan_web
+    row = db.get(place_key)
+    if not row:
+        return jsonify({"ok": False, "error": "Lead tidak ditemukan"}), 404
+    emails = [e.strip() for e in [row.get("email") or ""] +
+              str(row.get("email_lain") or "").split(";") if e.strip()]
+    return jsonify({
+        "ok": True, "bagian": pesan_web.isi_pesan(row, _pengaturan_pesan()),
+        "urutan": ["pembuka", "fu1", "fu2", "wa"],
+        "nama": row.get("nama_bisnis"), "emails": emails,
+        "nomor_wa": kontak.nomor_wa(row), "wa_link": row.get("whatsapp_link") or "",
+        "nama_pic": row.get("nama_pic") or "", "status": row.get("status_leads") or "",
+    })
+
+
+@app.route("/leads/pengaturan-pesan", methods=["GET", "POST"])
+def leads_pengaturan_pesan():
+    """Identitas pengirim & teks template pesan klien website."""
+    from scrapers import pesan_web
+    bawaan = dict(pesan_web.BAWAAN, fu1_hari="3", fu2_hari="7")
+    if request.method == "GET":
+        return jsonify({"pengaturan": db.pengaturan(bawaan),
+                        "placeholder": pesan_web.PLACEHOLDER})
+    d = request.json or {}
+    for k in ("fu1_hari", "fu2_hari"):
+        if k in d and not str(d[k]).strip().isdigit():
+            return jsonify({"ok": False, "error": "Hari follow-up harus berupa angka."}), 400
+    return jsonify({"ok": True, "pengaturan": db.simpan_pengaturan(bawaan, d)})
 
 
 @app.route("/leads/detail/<path:place_key>")
@@ -744,15 +950,41 @@ def leads_detail(place_key):
     return jsonify(row)
 
 
+@app.route("/leads/export/kolom")
+def leads_export_kolom():
+    import ekspor
+    return jsonify(ekspor.katalog("webdev"))
+
+
+@app.route("/leads/export", methods=["POST"])
+def leads_export_pilih():
+    """Export dengan kolom pilihan user (dari modal pemilih kolom)."""
+    import ekspor
+    d = request.json or {}
+    filters = _filter_dari_request(d.get("filter") or {})
+    rows, _ = db.query_leads(**filters, limit=0, tanpa_opt_out=True)
+    ringkasan = {"Diekspor pada": datetime.now().strftime("%d-%m-%Y %H:%M")}
+    nama, n = ekspor.tulis(rows, "webdev", d.get("kolom") or [],
+                           fmt=d.get("format") or "xlsx", wajib=d.get("wajib") or "",
+                           awalan="leads", ringkasan=ringkasan)
+    if not nama:
+        return jsonify({"ok": False, "error": "Tidak ada lead yang cocok — periksa filter "
+                                              "atau syarat kontak export."}), 404
+    return jsonify({"ok": True, "jumlah": n, "url": url_for("download", filename=nama)})
+
+
 @app.route("/leads/export")
 def leads_export():
     """Ekspor hasil filter yang sedang aktif ke Excel, memakai writer yang sama."""
     from scrapers.gmaps import COLUMN_ORDER, _rapikan, _save_excel
 
     filters = _filter_dari_request()
-    rows, total = db.query_leads(**filters, limit=100000, offset=0)
+    rows, total = db.query_leads(**filters, limit=0, tanpa_opt_out=True)
     if not rows:
-        return jsonify({"error": "Tidak ada lead yang cocok dengan filter"}), 404
+        # Dulu browser menampilkan JSON mentah. Kembali ke halaman Leads dengan
+        # pesan yang bisa dibaca.
+        args = {k: v for k, v in request.args.items() if k != "hal"}
+        return redirect(url_for("leads", kosong=1, **args))
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     nama = f"leads_{timestamp}.xlsx"
@@ -772,21 +1004,14 @@ def results():
     files = sorted(OUTPUT_DIR.glob("*.xlsx"), key=lambda f: f.stat().st_mtime, reverse=True)
     file_list = []
     for f in files:
-        try:
-            import pandas as pd
-            df = pd.read_excel(f)
-            rows = len(df)
-            cols = list(df.columns)[:6]
-        except Exception:
-            rows = "?"
-            cols = []
+        rows, cols = _info_xlsx(f)
         file_list.append({
             "name": f.name,
             "rows": rows,
             "date": datetime.fromtimestamp(f.stat().st_mtime).strftime("%d %b %Y %H:%M"),
             "size": f"{max(f.stat().st_size // 1024, 1)} KB",
             "cols": cols,
-            "type": f.name.split("_")[0],
+            **_jenis(f.name),
         })
     return render_template("results.html", files=file_list)
 
@@ -825,6 +1050,13 @@ def preview(filename):
         return jsonify({"columns": list(df.columns), "rows": rows, "total": len(df)})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+# ─── Menu Distributor Komponen ────────────────────────────────────────────────
+
+import komponen_routes  # noqa: E402
+
+komponen_routes.pasang(app, _new_job, _jalankan, job_berjalan)
 
 
 # ─── Run ──────────────────────────────────────────────────────────────────────
