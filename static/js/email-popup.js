@@ -9,11 +9,13 @@ const EmailPopup = (() => {
   let data = null, kunci = null, tabAktif = 'pembuka', modal = null, onBerubah = null;
   // Endpoint per menu. Bawaan = Leads Komponen; Database Leads (klien website)
   // memanggil buka() dengan opsi sendiri dan tanpa lampiran proposal.
-  const BAWAAN = { pesanUrl: '/komponen/email/', statusUrl: '/komponen/status', lampiran: true };
+  // `tab` = tab yang dibuka pertama (opsional).
+  const BAWAAN = { pesanUrl: '/komponen/email/', statusUrl: '/komponen/status', lampiran: true, tab: null };
   let opsi = BAWAAN;
 
   const TANDAI = {
     pembuka: { status: 'Email Terkirim', label: 'Tandai Email Terkirim', ikon: 'envelope-check' },
+    proposal: { status: 'Email Terkirim', label: 'Tandai Proposal Terkirim', ikon: 'envelope-check' },
     fu1: { status: 'Follow-up 1', label: 'Tandai Follow-up H+3 Terkirim', ikon: 'reply' },
     fu2: { status: 'Follow-up 2', label: 'Tandai Follow-up H+7 Terkirim', ikon: 'reply-all' },
     wa: { status: 'WA Terkirim', label: 'Tandai WA Terkirim', ikon: 'whatsapp' },
@@ -88,6 +90,16 @@ const EmailPopup = (() => {
     };
   }
 
+  /** Tab mengikuti `urutan` dari server — Klien Website punya tab Proposal, komponen tidak. */
+  function renderDaftarTab() {
+    const urutan = (data.urutan || Object.keys(data.bagian)).filter(k => data.bagian[k]);
+    el('emTabs').innerHTML = urutan.map(k => `<li class="nav-item"><a class="nav-link" href="#" data-tab="${escapeHtml(k)}">
+      ${k === 'wa' ? '<i class="bi bi-whatsapp text-success"></i> ' : ''}${escapeHtml(data.bagian[k].judul || k)}</a></li>`).join('');
+    document.querySelectorAll('#emTabs .nav-link').forEach(a => a.onclick = ev => {
+      ev.preventDefault(); tabAktif = a.dataset.tab; renderTab();
+    });
+  }
+
   function renderTab() {
     const b = data.bagian[tabAktif];
     document.querySelectorAll('#emTabs .nav-link').forEach(a =>
@@ -104,7 +116,7 @@ const EmailPopup = (() => {
     el('emWaBaris').classList.toggle('d-none', !wa);
     el('emWaNomor').textContent = data.nomor_wa || 'tidak ada nomor WA';
     el('emWaBuka').classList.toggle('disabled', !data.wa_link);
-    const t = TANDAI[tabAktif];
+    const t = TANDAI[tabAktif] || TANDAI.pembuka;
     el('emTandai').innerHTML = `<i class="bi bi-${t.ikon} me-1"></i>${t.label}`;
     el('emMailto').classList.toggle('d-none', wa || !data.emails.length);
   }
@@ -142,12 +154,7 @@ const EmailPopup = (() => {
             <div class="form-text" style="font-size:.7rem">Lampirkan manual di aplikasi email (total &lt; 5 MB).</div>
           </div>
         </div>
-        <ul class="nav nav-tabs mb-3" id="emTabs">
-          <li class="nav-item"><a class="nav-link" href="#" data-tab="pembuka">Email Pembuka</a></li>
-          <li class="nav-item"><a class="nav-link" href="#" data-tab="fu1">Follow-up H+3</a></li>
-          <li class="nav-item"><a class="nav-link" href="#" data-tab="fu2">Follow-up H+7</a></li>
-          <li class="nav-item"><a class="nav-link" href="#" data-tab="wa"><i class="bi bi-whatsapp text-success"></i> WhatsApp</a></li>
-        </ul>
+        <ul class="nav nav-tabs mb-3" id="emTabs"></ul>
         <div id="emCatatan" class="alert alert-secondary py-1 px-2 fst-italic" style="font-size:.8rem"></div>
         <div id="emSubjectBaris" class="mb-2">
           <label class="form-label mb-1 fw-semibold">Subject</label>
@@ -181,9 +188,6 @@ const EmailPopup = (() => {
     </div>
   </div>
 </div>`);
-    document.querySelectorAll('#emTabs .nav-link').forEach(a => a.onclick = ev => {
-      ev.preventDefault(); tabAktif = a.dataset.tab; renderTab();
-    });
     el('emSalinSubject').onclick = e => salin(el('emSubject').value, e.currentTarget);
     el('emSalinIsi').onclick = e => salin(isiAkhir(), e.currentTarget);
     el('emSalinNomor').onclick = e => salin(data.nomor_wa || '', e.currentTarget);
@@ -201,7 +205,7 @@ const EmailPopup = (() => {
       buka(kunci, onBerubah);
     };
     el('emTandai').onclick = async () => {
-      const t = TANDAI[tabAktif];
+      const t = TANDAI[tabAktif] || TANDAI.pembuka;
       const d = await simpanCrm({ status: t.status });
       if (d && d.ok) {
         el('emStatus').innerHTML = `<span class="text-success"><i class="bi bi-check-circle"></i>
@@ -235,8 +239,11 @@ const EmailPopup = (() => {
     el('emPic').value = d.nama_pic || '';
     renderPenerima();
     if (opsi.lampiran) renderLampiran();
+    renderDaftarTab();
     // Tab awal mengikuti tahap lead: sudah email → follow-up berikutnya.
-    tabAktif = !d.emails.length ? 'wa'
+    // Tombol yang meminta tab tertentu (mis. "Proposal") menang atas tebakan.
+    tabAktif = (opsi.tab && d.bagian[opsi.tab]) ? opsi.tab
+      : !d.emails.length ? 'wa'
       : d.status === 'Email Terkirim' ? 'fu1'
       : d.status === 'Follow-up 1' ? 'fu2' : 'pembuka';
     renderTab();

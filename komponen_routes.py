@@ -124,11 +124,21 @@ def _filter(sumber=None):
     a = sumber if sumber is not None else request.args
 
     def s(nama):
-        return (a.get(nama) or "").strip() or None
+        return (str(a.get(nama) or "")).strip() or None
+
+    try:
+        skor_min = int(s("skor_min")) if s("skor_min") else None
+    except ValueError:
+        skor_min = None
+    tab = s("tab")
     return {
         "q": s("q"), "segmen": s("segmen"), "tier": s("tier"),
         "area_pencarian": s("area"), "kota": s("kota"), "status": s("status"),
+        # wa=1 / email=1 = tautan lama sebelum ada dropdown "Kontak".
         "punya_wa": a.get("wa") == "1", "punya_email": a.get("email") == "1",
+        "kontak": s("kontak"), "website": s("website"), "skor_min": skor_min,
+        "kanal": s("kanal"),
+        "tab": tab if tab and tab != "semua" else None,
         "follow_up": a.get("fu") == "1", "run": s("run"),
     }
 
@@ -143,19 +153,20 @@ def _halaman(nilai):
 @bp.route("/komponen/leads")
 def leads():
     f = _filter()
-    urut = request.args.get("urut") or "skor"
+    # Tab "Sudah Dikontak" paling berguna diurutkan dari kontak terakhir.
+    urut = request.args.get("urut") or ("dihubungi" if f["tab"] == "sudah" else "skor")
     per = 50
     hal = _halaman(request.args.get("hal"))
     rows, total = dk.query(f, urut=urut, limit=per, offset=(hal - 1) * per)
     for r in rows:
         r["nomor_wa"] = kontak.nomor_wa(r)
-        r["email_semua"] = [e for e in [r.get("email")] +
-                            str(r.get("email_lain") or "").split(";") if e and e.strip()]
+        r["email_semua"] = kontak.email_semua(r)
     total_hal = max((total + per - 1) // per, 1)
     return render_template(
         "komponen_leads.html", leads=rows, total=total, halaman=hal,
         total_halaman=total_hal, f=f, urut=urut,
         args={k: v for k, v in request.args.items() if k != "hal"},
+        tabs=db.TAB_LEADS, tab_aktif=f["tab"] or "semua", jumlah_tab=dk.hitung_tab(f),
         opsi_segmen=dk.nilai_unik("segmen"), opsi_tier=komponen.URUTAN_TIER,
         opsi_area=dk.nilai_unik("area_pencarian"), opsi_kota=dk.nilai_unik("kota"),
         opsi_status=komponen.STATUS_PILIHAN, stats=dk.stats(),
@@ -180,6 +191,17 @@ def status():
     return jsonify({"ok": True, "status": row.get("status_leads"),
                     "tanggal_follow_up": row.get("tanggal_follow_up") or "",
                     "tanggal_dihubungi": row.get("tanggal_dihubungi") or ""})
+
+
+@bp.route("/komponen/pin", methods=["POST"])
+def pin():
+    """Pasang/lepas PIN "lead berpotensi" untuk satu atau banyak lead."""
+    d = request.json or {}
+    keys = d.get("keys") or ([d["place_key"]] if d.get("place_key") else [])
+    if not keys:
+        return jsonify({"ok": False, "error": "Pilih minimal satu lead."}), 400
+    n = dk.set_pin(keys, bool(d.get("dipin", True)))
+    return jsonify({"ok": True, "jumlah": n, "dipin": bool(d.get("dipin", True))})
 
 
 @bp.route("/komponen/detail/<path:place_key>")
@@ -359,11 +381,9 @@ def email(place_key):
         p = dok.FOLDER_PROPOSAL / row["proposal_file"]
         if p.is_file():
             proposal_url = _url_berkas(p)
-    emails = [e.strip() for e in [row.get("email") or ""] +
-              str(row.get("email_lain") or "").split(";") if e.strip()]
     return jsonify({
         "ok": True, "bagian": bagian, "urutan": [k for k, _, _ in dok.BAGIAN_EMAIL],
-        "nama": row.get("nama_bisnis"), "emails": emails,
+        "nama": row.get("nama_bisnis"), "emails": kontak.email_semua(row),
         "nomor_wa": kontak.nomor_wa(row), "wa_link": row.get("whatsapp_link") or "",
         "nama_pic": row.get("nama_pic") or "", "status": row.get("status_leads") or "",
         "proposal_nomor": row.get("proposal_nomor") or "",

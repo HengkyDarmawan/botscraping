@@ -56,7 +56,9 @@ _HARI_PER_BULAN = 30.44
 KOLOM_MILIK_USER = {"status_leads", "catatan", "tanggal_follow_up", "first_seen_at",
                     # ruang komponen
                     "nama_pic", "proposal_nomor", "proposal_tanggal",
-                    "proposal_file", "tanggal_dihubungi", "kanal_kontak"}
+                    "proposal_file", "tanggal_dihubungi", "kanal_kontak",
+                    # tanda "lead berpotensi" yang dipasang user (kedua ruang)
+                    "dipin"}
 _KOLOM_MILIK_USER = KOLOM_MILIK_USER
 
 SCHEMA_LEADS = """
@@ -320,6 +322,8 @@ KOLOM_KONTAK = {
     "nama_pic":         "TEXT",
     "tanggal_dihubungi": "TEXT",
     "kanal_kontak":     "TEXT",
+    # 1 = di-PIN user sebagai lead berpotensi: punya tab sendiri & selalu di atas.
+    "dipin":            "INTEGER DEFAULT 0",
 }
 
 # Kolom yang hanya ada di ruang komponen (proposal ISB).
@@ -763,6 +767,71 @@ SQL_AKTIF = ("COALESCE(lolos_filter, 1) = 1 AND "
              "LOWER(COALESCE(status_buka, '')) NOT LIKE '%closed%'")
 
 
+# ─── Tab & filter bersama halaman Leads (kedua ruang) ─────────────────────────
+
+# Status yang berarti lead BELUM benar-benar dihubungi. "Proposal Dibuat" (ruang
+# komponen) baru menyiapkan dokumen, belum mengirim apa pun.
+STATUS_BELUM_KONTAK = ("Belum Dihubungi", "Proposal Dibuat")
+
+_STATUS = "COALESCE(status_leads, 'Belum Dihubungi')"
+_DAFTAR_BELUM = ", ".join(f"'{s}'" for s in STATUS_BELUM_KONTAK)
+_DAFTAR_SELESAI = ", ".join(f"'{s}'" for s in ("Deal", "Tidak Tertarik", "Jangan Hubungi"))
+# Sudah dikontak = pernah ditandai terkirim, atau statusnya sudah maju. Status
+# lama ("Sudah Dihubungi", "Follow Up") ikut terbaca lewat cabang kedua.
+_SQL_SUDAH = (f"(COALESCE(tanggal_dihubungi, '') != '' OR "
+              f"{_STATUS} NOT IN ({_DAFTAR_BELUM}))")
+_SQL_SELESAI = f"{_STATUS} IN ({_DAFTAR_SELESAI})"
+
+# (kunci, label) — urutan tampil nav tab.
+TAB_LEADS = [("semua", "Semua"), ("dipin", "Dipin"), ("belum", "Belum Dikontak"),
+             ("sudah", "Sudah Dikontak"), ("fu", "Follow-up Hari Ini"),
+             ("selesai", "Selesai")]
+
+
+def _sql_tab(tab):
+    """Kondisi SQL tab (tanpa argumen; tanggal hari ini ditanam sebagai literal)."""
+    hari_ini = datetime.now().strftime("%Y-%m-%d")
+    return {
+        "dipin": "COALESCE(dipin, 0) = 1",
+        "belum": f"NOT {_SQL_SUDAH}",
+        "sudah": f"{_SQL_SUDAH} AND NOT {_SQL_SELESAI}",
+        "fu": (f"tanggal_follow_up IS NOT NULL AND tanggal_follow_up != '' AND "
+               f"tanggal_follow_up <= '{hari_ini}' AND NOT {_SQL_SELESAI}"),
+        "selesai": _SQL_SELESAI,
+    }.get(tab)
+
+
+def hitung_tab(klausa, args):
+    """
+    Jumlah baris tiap tab untuk WHERE `klausa` (filter lain yang aktif, TANPA
+    tab) — angka badge sama dengan jumlah baris saat tab itu diklik.
+    """
+    kolom = ", ".join(f"COALESCE(SUM(CASE WHEN {_sql_tab(k)} THEN 1 ELSE 0 END), 0) AS {k}"
+                      for k, _ in TAB_LEADS if k != "semua")
+    with _lock:
+        r = get_conn().execute(
+            f"SELECT COUNT(*) AS semua, {kolom} FROM businesses{klausa}", args).fetchone()
+    return dict(r)
+
+
+def kondisi_kontak(kontak, kolom_email="email"):
+    """Kondisi SQL dropdown "Kontak" (punya WA / email / keduanya / tanpa)."""
+    ada_wa = "COALESCE(whatsapp_link, '') != ''"
+    ada_email = f"COALESCE({kolom_email}, '') != ''"
+    return {
+        "wa": ada_wa,
+        "email": ada_email,
+        "wa_atau_email": f"({ada_wa} OR {ada_email})",
+        "wa_dan_email": f"({ada_wa} AND {ada_email})",
+        "tanpa": f"NOT ({ada_wa} OR {ada_email})",
+    }.get(kontak)
+
+
+def urutan_dengan_pin(order):
+    """Lead yang di-PIN selalu di atas, lalu urutan pilihan user."""
+    return f"COALESCE(dipin, 0) DESC, {order}"
+
+
 def lewati_catat(place_key, nama, alasan, jenis="kontak", mode=""):
     if not place_key:
         return
@@ -881,6 +950,21 @@ def hapus_leads(keys, jangan_ambil_lagi=False):
     with _lock:
         conn = get_conn()
         n = _hapus_keys(conn, keys, jangan_ambil_lagi)
+        conn.commit()
+    return n
+
+
+def set_pin(keys, nilai=True):
+    """Pasang/lepas PIN "lead berpotensi" pada lead tertentu. Return jumlah baris."""
+    keys = [k for k in dict.fromkeys(keys or []) if k]
+    n = 0
+    with _lock:
+        conn = get_conn()
+        for i in range(0, len(keys), 500):
+            potong = keys[i:i + 500]
+            n += conn.execute(
+                f"UPDATE businesses SET dipin = ? WHERE place_key IN "
+                f"({','.join('?' * len(potong))})", [1 if nilai else 0] + potong).rowcount
         conn.commit()
     return n
 
@@ -1157,16 +1241,11 @@ def run_terputus_terakhir():
     return d
 
 
-def query_leads(tier=None, jasa_utama=None, area=None, status_leads=None,
-                punya_wa=None, skor_min=None, skor_max=None, q=None,
-                run=None, urut="skor_pembeli", limit=50, offset=0, kontak=None,
-                follow_up=False, tanpa_opt_out=False):
-    """
-    Ambil lead dengan filter. Return (rows, total_sebelum_paginasi).
-
-    `run` membatasi hasil ke lead yang diklaim satu run scraping — dipakai tombol
-    "Buat Excel dari run itu" untuk run yang terputus.
-    """
+def _where_leads(tier=None, jasa_utama=None, area=None, status_leads=None,
+                 punya_wa=None, skor_min=None, skor_max=None, q=None,
+                 run=None, kontak=None, follow_up=False, tanpa_opt_out=False,
+                 website=None, kota=None, kanal=None, tab=None, **_abaikan):
+    """WHERE halaman Database Leads. Return (klausa, args)."""
     where, args = [SQL_AKTIF], []
     if run:
         where.append("place_key IN (SELECT place_key FROM run_leads WHERE run_id = ?)")
@@ -1186,17 +1265,21 @@ def query_leads(tier=None, jasa_utama=None, area=None, status_leads=None,
         args.append(status_leads)
     if punya_wa:
         where.append("whatsapp_link IS NOT NULL AND whatsapp_link != ''")
-    ada_wa = "COALESCE(whatsapp_link, '') != ''"
-    ada_email = "COALESCE(email, '') != ''"
-    kondisi_kontak = {
-        "wa": ada_wa,
-        "email": ada_email,
-        "wa_atau_email": f"({ada_wa} OR {ada_email})",
-        "wa_dan_email": f"({ada_wa} AND {ada_email})",
-        "tanpa": f"NOT ({ada_wa} OR {ada_email})",
-    }.get(kontak)
-    if kondisi_kontak:
-        where.append(kondisi_kontak)
+    kondisi = kondisi_kontak(kontak)
+    if kondisi:
+        where.append(kondisi)
+    if website == "ada":
+        where.append("COALESCE(website, '') != '' AND COALESCE(web_status, '') != 'tidak_ada'")
+    elif website == "tidak":
+        where.append("(COALESCE(website, '') = '' OR web_status = 'tidak_ada')")
+    if kota:
+        where.append("kota = ?")
+        args.append(kota)
+    if kanal:
+        where.append("COALESCE(kanal_kontak, '') LIKE ?")
+        args.append(f"%{kanal}%")
+    if tab and _sql_tab(tab):
+        where.append(_sql_tab(tab))
     if follow_up:
         where.append("tanggal_follow_up IS NOT NULL AND tanggal_follow_up <= ? AND "
                      "COALESCE(status_leads, 'Belum Dihubungi') NOT IN "
@@ -1212,18 +1295,38 @@ def query_leads(tier=None, jasa_utama=None, area=None, status_leads=None,
         where.append("COALESCE(skor_pembeli, 0) <= ?")
         args.append(int(skor_max))
     if q:
-        where.append("(nama_bisnis LIKE ? OR alamat LIKE ? OR kategori LIKE ?)")
-        pola = f"%{q}%"
-        args += [pola, pola, pola]
+        where.append("(nama_bisnis LIKE ? OR alamat LIKE ? OR kategori LIKE ? "
+                     "OR email LIKE ? OR email_lain LIKE ? OR telepon LIKE ?)")
+        args += [f"%{q}%"] * 6
+    return " WHERE " + " AND ".join(where), args
 
-    klausa = (" WHERE " + " AND ".join(where)) if where else ""
-    kolom_urut = {
-        "skor_pembeli": "COALESCE(skor_pembeli, 0) DESC",
-        "ulasan": "COALESCE(jumlah_ulasan, 0) DESC",
-        "rating": "COALESCE(rating, 0) DESC",
-        "terbaru": "first_seen_at DESC",
-        "nama": "nama_bisnis ASC",
-    }.get(urut, "COALESCE(skor_pembeli, 0) DESC")
+
+URUTAN_LEADS = {
+    "skor_pembeli": "COALESCE(skor_pembeli, 0) DESC",
+    "ulasan": "COALESCE(jumlah_ulasan, 0) DESC",
+    "rating": "COALESCE(rating, 0) DESC",
+    "terbaru": "first_seen_at DESC",
+    "nama": "nama_bisnis ASC",
+    "dihubungi": "COALESCE(tanggal_dihubungi, '') DESC, COALESCE(skor_pembeli, 0) DESC",
+    "follow_up": "tanggal_follow_up IS NULL, tanggal_follow_up ASC",
+}
+
+
+def hitung_tab_leads(**filters):
+    """Angka badge nav tab Database Leads untuk filter aktif (tab diabaikan)."""
+    filters.pop("tab", None)
+    return hitung_tab(*_where_leads(**filters))
+
+
+def query_leads(urut="skor_pembeli", limit=50, offset=0, **filters):
+    """
+    Ambil lead dengan filter (lihat `_where_leads`). Return (rows, total_sebelum_paginasi).
+
+    `run` membatasi hasil ke lead yang diklaim satu run scraping — dipakai tombol
+    "Buat Excel dari run itu" untuk run yang terputus.
+    """
+    klausa, args = _where_leads(**filters)
+    kolom_urut = urutan_dengan_pin(URUTAN_LEADS.get(urut, URUTAN_LEADS["skor_pembeli"]))
 
     with _lock:
         conn = get_conn()

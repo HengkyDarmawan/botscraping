@@ -202,6 +202,21 @@ body { margin: 0; background: #f0f4f8; font-family: 'Segoe UI', sans-serif; }
 .badge-komponen { background: #e3fafc; color: #0b7285; }
 .badge-social { background: #f3e5f5; color: #6a1b9a; }
 
+/* Halaman Leads: nav tab status & lead yang di-PIN */
+.tab-leads { border-bottom: 0; }
+/* .nav-item milik sidebar ikut mengenai nav tab Bootstrap — netralkan. */
+.tab-leads .nav-item, #emTabs .nav-item {
+  display: list-item; padding: 0; border-left: 0; gap: 0; font-size: inherit; color: inherit;
+}
+.tab-leads .nav-item:hover, #emTabs .nav-item:hover { background: none; }
+.tab-leads .nav-item span { display: inline-block; }
+.tab-leads .nav-link { color: #555; font-size: .85rem; }
+.tab-leads .nav-link.active { background: #fff; border-bottom-color: #fff; }
+.tab-leads + .card { border-top-left-radius: 0; }
+.baris-dipin > td { background: #fff8e1 !important; }
+.btn-pin { line-height: 1; }
+.salin { cursor: pointer; }
+
 /* Responsive */
 @media (max-width: 768px) {
   .sidebar { width: 60px; }

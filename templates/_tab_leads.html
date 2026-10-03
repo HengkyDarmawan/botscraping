@@ -1,0 +1,19 @@
+{# Nav tab status lead — dipakai Database Leads & Leads Komponen.
+   Butuh: tabs, tab_aktif, jumlah_tab, args. Filter lain ikut terbawa di tautan;
+   urutan TIDAK, supaya tiap tab memakai urutan bawaannya ("Sudah Dikontak" =
+   kontak terakhir di atas). #}
+{% set ikon_tab = {'semua': 'bi-list-ul', 'dipin': 'bi-star-fill text-warning', 'belum': 'bi-hourglass-split',
+                   'sudah': 'bi-check2-circle text-success', 'fu': 'bi-alarm text-danger', 'selesai': 'bi-flag'} %}
+{% set args_tab = {} %}
+{% for k, v in args.items() if k not in ('urut', 'tab', 'fu') %}{% set _ = args_tab.update({k: v}) %}{% endfor %}
+<ul class="nav nav-tabs tab-leads flex-nowrap overflow-auto">
+  {% for kunci, label in tabs %}
+  <li class="nav-item">
+    <a class="nav-link text-nowrap {% if tab_aktif == kunci %}active fw-semibold{% endif %}"
+       href="?{{ dict(args_tab, tab=kunci)|urlencode }}">
+      <i class="bi {{ ikon_tab[kunci] }} me-1"></i>{{ label }}
+      <span class="badge rounded-pill {% if tab_aktif == kunci %}bg-primary{% else %}bg-secondary-subtle text-secondary-emphasis{% endif %} ms-1">{{ jumlah_tab[kunci] or 0 }}</span>
+    </a>
+  </li>
+  {% endfor %}
+</ul>

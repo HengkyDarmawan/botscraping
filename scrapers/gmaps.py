@@ -716,12 +716,18 @@ async def _kumpulkan_kartu(page, max_results, filters, cb, should_stop=None):
 
 # ─── Ekstrak detail ───────────────────────────────────────────────────────────
 
+# Tombol info di halaman detail (alamat, jam, plus code) diawali ikon dari font
+# ikon Google — karakter Private Use Area, mis. "\nJl. ...". Di Word/Excel
+# ikon itu tampil sebagai kotak kosong, jadi dibuang sebelum disimpan.
+_RE_IKON = re.compile(r"[-]")
+
+
 async def _extract_detail(page):
     async def st(sel, fb=None):
         try:
             el = await page.query_selector(sel)
             if el:
-                return (await el.inner_text()).strip()
+                return _RE_IKON.sub("", await el.inner_text()).strip()
         except Exception:
             pass
         return await st(fb) if fb else None

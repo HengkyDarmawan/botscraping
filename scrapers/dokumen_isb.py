@@ -14,7 +14,9 @@ mengedit kalimatnya di Word, hasil aplikasi ikut berubah tanpa menyentuh kode:
 
 Setelah diisi, dokumen selalu dipindai ulang. Placeholder yang tersisa berarti
 templatenya berubah bentuk — proses berhenti dengan pesan jelas daripada
-menghasilkan surat yang separuh terisi.
+menghasilkan surat yang separuh terisi. Tanda klasifikasi yang disisipkan Word
+lewat sensitivity label Microsoft 365 (mis. "[ OFFICIAL ]" di header/footer)
+bukan placeholder — dibiarkan apa adanya.
 """
 import re
 import threading
@@ -31,6 +33,16 @@ BULAN = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli",
          "Agustus", "September", "Oktober", "November", "Desember"]
 
 _RE_SISA = re.compile(r"\[[^\]\n]{2,60}\]|\{\{[^}]+\}\}")
+# Tanda klasifikasi sensitivity label Microsoft 365 ("[ OFFICIAL ]",
+# "[ INTERNAL ]", ...) yang disisipkan Word ke header/footer — bukan placeholder.
+# Placeholder template asli selalu huruf campuran, jadi tidak ikut terkecuali.
+_RE_PENANDA = re.compile(r"^\[\s*[A-Z][A-Z0-9 \-:/]*\s*\]$")
+
+
+def _sisa_placeholder(teks):
+    """Placeholder yang masih tertinggal di `teks`, tanpa tanda klasifikasi Word."""
+    return {m.group() for m in _RE_SISA.finditer(teks)
+            if not _RE_PENANDA.match(m.group())}
 
 
 def company_profile():
@@ -66,7 +78,10 @@ def bentuk_nomor(pola, urut, tgl):
 
 def alamat_lengkap(row):
     """Alamat GMaps, ditambah kota bila alamatnya belum menyebut kota."""
-    alamat = str(row.get("alamat") or "").strip()
+    # Lead lama tersimpan dengan ikon pin GMaps ("\n...") yang di Word
+    # tampil sebagai kotak di baris sendiri — ikon dibuang, spasi dirapikan.
+    alamat = re.sub(r"[-]", "", str(row.get("alamat") or ""))
+    alamat = re.sub(r"\s+", " ", alamat).strip()
     kota = str(row.get("kota") or "").strip()
     if kota:
         inti = re.sub(r"^(kota|kabupaten|kab\.)\s+", "", kota, flags=re.I).lower()
@@ -180,8 +195,7 @@ def isi_proposal(row, atur, nomor, tgl, tujuan_docx):
                 awal.text = awal.text.replace("Jakarta", kota_surat, 1)
         _isi_paragraf(p, ganti, nomor=nomor, pic=pic)
 
-    sisa = sorted({m.group() for p in _semua_paragraf(doc)
-                   for m in _RE_SISA.finditer(p.text)})
+    sisa = sorted(set().union(*(_sisa_placeholder(p.text) for p in _semua_paragraf(doc))))
     if sisa:
         raise ValueError("Template proposal berubah — placeholder ini tidak terisi: "
                          + ", ".join(sisa))
@@ -378,8 +392,7 @@ def isi_template_email(row, atur):
     hasil = {}
     for kunci, bagian in baca_template_email().items():
         b = {k: isi(v) for k, v in bagian.items()}
-        b["sisa"] = sorted({m.group() for v in (b["subject"], b["isi"])
-                            for m in _RE_SISA.finditer(v)})
+        b["sisa"] = sorted(_sisa_placeholder(b["subject"]) | _sisa_placeholder(b["isi"]))
         hasil[kunci] = b
     return hasil
 

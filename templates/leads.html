@@ -23,7 +23,7 @@
       ('Total Lead', stats.total, '#3498db', '/leads'),
       ('PANAS 🔥', stats.per_tier.get('PANAS', 0), '#e74c3c', '/leads?tier=PANAS'),
       ('Belum Dihubungi', stats.belum_dihubungi, '#f39c12', '/leads?status=Belum+Dihubungi'),
-      ('Follow Up Hari Ini', stats.follow_up_hari_ini, '#16a085', '/leads?fu=1')] %}
+      ('Follow Up Hari Ini', stats.follow_up_hari_ini, '#16a085', '/leads?tab=fu&urut=follow_up')] %}
   <div class="col-6 col-lg-3">
     <a href="{{ link }}" class="text-decoration-none text-reset">
       <div class="stat-card" style="border-left-color: {{ warna }}">
@@ -40,7 +40,7 @@
   <div class="card-body py-3">
     <form method="get" class="row g-2 align-items-end">
       <div class="col-6 col-md-3">
-        <label class="form-label mb-1">Cari nama / alamat</label>
+        <label class="form-label mb-1">Cari nama / alamat / email</label>
         <input type="text" name="q" class="form-control form-control-sm"
                value="{{ filters.q or '' }}" placeholder="mis. klinik">
       </div>
@@ -80,8 +80,8 @@
           {% endfor %}
         </select>
       </div>
-      <div class="col-6 col-md-2">
-        <label class="form-label mb-1">Skor minimal</label>
+      <div class="col-6 col-md-1">
+        <label class="form-label mb-1">Skor min</label>
         <input type="number" name="skor_min" class="form-control form-control-sm"
                value="{{ filters.skor_min if filters.skor_min is not none else '' }}"
                min="0" max="100" placeholder="0">
@@ -89,11 +89,36 @@
       <div class="col-6 col-md-2">
         <label class="form-label mb-1">Urutkan</label>
         <select name="urut" class="form-select form-select-sm">
-          <option value="skor_pembeli" {% if filters.urut == 'skor_pembeli' %}selected{% endif %}>Skor pembeli</option>
-          <option value="ulasan" {% if filters.urut == 'ulasan' %}selected{% endif %}>Jumlah ulasan</option>
-          <option value="rating" {% if filters.urut == 'rating' %}selected{% endif %}>Rating</option>
-          <option value="terbaru" {% if filters.urut == 'terbaru' %}selected{% endif %}>Terbaru</option>
-          <option value="nama" {% if filters.urut == 'nama' %}selected{% endif %}>Nama A-Z</option>
+          {% for v, l in [('skor_pembeli', 'Skor pembeli'), ('dihubungi', 'Terakhir dihubungi'),
+                          ('follow_up', 'Jadwal follow-up'), ('ulasan', 'Jumlah ulasan'),
+                          ('rating', 'Rating'), ('terbaru', 'Terbaru'), ('nama', 'Nama A-Z')] %}
+          <option value="{{ v }}" {% if filters.urut == v %}selected{% endif %}>{{ l }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-6 col-md-2">
+        <label class="form-label mb-1">Website</label>
+        <select name="website" class="form-select form-select-sm">
+          {% for v, l in [('', 'Semua'), ('ada', 'Punya website'), ('tidak', 'Tanpa website')] %}
+          <option value="{{ v }}" {% if (filters.website or '') == v %}selected{% endif %}>{{ l }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-6 col-md-2">
+        <label class="form-label mb-1">Kota</label>
+        <select name="kota" class="form-select form-select-sm">
+          <option value="">Semua</option>
+          {% for k in opsi_kota %}
+          <option value="{{ k }}" {% if filters.kota == k %}selected{% endif %}>{{ k }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-6 col-md-2">
+        <label class="form-label mb-1">Dihubungi lewat</label>
+        <select name="kanal" class="form-select form-select-sm">
+          {% for v, l in [('', 'Semua'), ('email', 'Email'), ('wa', 'WhatsApp')] %}
+          <option value="{{ v }}" {% if (filters.kanal or '') == v %}selected{% endif %}>{{ l }}</option>
+          {% endfor %}
         </select>
       </div>
       <div class="col-6 col-md-3">
@@ -106,7 +131,9 @@
           {% endfor %}
         </select>
       </div>
-      <div class="col-12 col-md-5 d-flex gap-2 justify-content-md-end">
+      {% if filters.tab %}<input type="hidden" name="tab" value="{{ filters.tab }}">{% endif %}
+      {% if filters.run %}<input type="hidden" name="run" value="{{ filters.run }}">{% endif %}
+      <div class="col-12 col-md-9 d-flex gap-2 justify-content-md-end">
         <button type="submit" class="btn btn-primary btn-sm">
           <i class="bi bi-funnel me-1"></i>Terapkan
         </button>
@@ -120,11 +147,18 @@
 </div>
 
 <!-- Tabel -->
+{% include "_tab_leads.html" %}
 <div class="card">
   <div class="card-header bg-white d-flex flex-wrap gap-2 justify-content-between align-items-center">
     <span><strong>{{ total }}</strong> lead cocok dengan filter · <span id="jmlPilih">0</span> dipilih
       <small class="text-muted ms-2">Halaman {{ halaman }} dari {{ total_halaman }}</small></span>
     <div class="d-flex flex-wrap gap-2">
+      <button class="btn btn-outline-warning btn-sm" data-pin-massal="1" disabled title="PIN baris yang dicentang sebagai lead berpotensi">
+        <i class="bi bi-star-fill me-1"></i>Pin terpilih
+      </button>
+      <button class="btn btn-outline-secondary btn-sm" data-pin-massal="0" disabled>
+        <i class="bi bi-star me-1"></i>Lepas pin
+      </button>
       <button class="btn btn-outline-secondary btn-sm" onclick="PengaturanPesan.buka()">
         <i class="bi bi-chat-text me-1"></i>Pengaturan pesan
       </button>
@@ -151,11 +185,12 @@
       </thead>
       <tbody>
         {% for l in leads %}
-        <tr id="row-{{ loop.index }}" data-key="{{ l.place_key }}">
+        <tr id="row-{{ loop.index }}" data-key="{{ l.place_key }}" data-dipin="{{ 1 if l.dipin else 0 }}">
           <td><input type="checkbox" class="form-check-input pilih-baris"></td>
           <td class="text-center">
             <div class="tier-badge tier-{{ l.tier or 'ARSIP' }}">{{ l.skor_pembeli or 0 }}</div>
-            <small class="text-muted" style="font-size:.65rem">{{ l.tier or '-' }}</small>
+            <small class="text-muted d-block" style="font-size:.65rem">{{ l.tier or '-' }}</small>
+            <button type="button" class="btn btn-link btn-sm p-0 btn-pin"></button>
           </td>
           <td>
             <div class="fw-semibold">{{ l.nama_bisnis or '-' }}</div>
@@ -183,10 +218,23 @@
             {% endif %}
           </td>
           <td style="font-size:.8rem">
-            {% if l.telepon %}<div><i class="bi bi-telephone me-1"></i>{{ l.telepon }}</div>{% endif %}
-            {% if l.email %}<div><i class="bi bi-envelope me-1"></i>{{ l.email }}</div>{% endif %}
-            {% if l.email_lain %}<small class="text-muted d-block" title="{{ l.email_lain }}">+ email lain</small>{% endif %}
-            {% if l.whatsapp_lain %}<small class="text-muted d-block">WA lain: {{ l.whatsapp_lain }}</small>{% endif %}
+            {% if l.nomor_wa %}
+            <div class="text-nowrap"><a href="{{ l.whatsapp_link }}" target="_blank" class="text-success text-decoration-none">
+              <i class="bi bi-whatsapp"></i> {{ l.nomor_wa }}</a>
+              <i class="bi bi-clipboard text-muted salin" role="button" data-teks="{{ l.nomor_wa }}" title="Salin"></i></div>
+            {% endif %}
+            {% if l.telepon and (not l.nomor_wa or l.telepon[-6:] != l.nomor_wa[-6:]) %}
+            <div class="text-nowrap text-muted"><i class="bi bi-telephone"></i> {{ l.telepon }}
+              <i class="bi bi-clipboard text-muted salin" role="button" data-teks="{{ l.telepon }}" title="Salin"></i></div>
+            {% endif %}
+            {% for e in l.email_semua[:2] %}
+            <div class="text-nowrap"><i class="bi bi-envelope"></i> {{ e }}
+              <i class="bi bi-clipboard text-muted salin" role="button" data-teks="{{ e }}" title="Salin"></i></div>
+            {% endfor %}
+            {% if l.email_semua|length > 2 %}<small class="text-muted" title="{{ l.email_semua[2:]|join(', ') }}">+{{ l.email_semua|length - 2 }} email lain</small>{% endif %}
+            {% if l.email_semua|length > 1 %}<small class="d-block text-primary salin-semua" role="button" data-teks="{{ l.email_semua|join(', ') }}"><i class="bi bi-clipboard"></i> salin semua email</small>{% endif %}
+            {% if l.whatsapp_lain %}<small class="text-muted d-block" title="Nomor WA lain dari website">WA lain: {{ l.whatsapp_lain }}</small>{% endif %}
+            {% if l.nama_pic %}<small class="d-block"><i class="bi bi-person"></i> {{ l.nama_pic }}</small>{% endif %}
             {% for kol, ikon in [('instagram','bi-instagram'),('facebook','bi-facebook'),('tokopedia','bi-bag-check'),
                                  ('shopee','bi-bag-heart'),('linkedin','bi-linkedin'),('youtube','bi-youtube')] %}
               {% if l[kol] %}<a href="{{ l[kol] }}" target="_blank" class="me-1" title="{{ kol|capitalize }}"><i class="bi {{ ikon }}"></i></a>{% endif %}
@@ -206,8 +254,11 @@
             <input type="text" class="form-control form-control-sm" placeholder="Catatan..."
                    value="{{ l.catatan or '' }}"
                    onchange="simpanLead('{{ l.place_key }}', this, 'catatan')">
+            <small class="text-muted info-kontak" style="font-size:.68rem">
+              {% if l.tanggal_dihubungi %}Dihubungi {{ l.tanggal_dihubungi }}{% if l.kanal_kontak %} ({{ l.kanal_kontak }}){% endif %}{% endif %}
+            </small>
           </td>
-          <td class="text-nowrap">
+          <td style="min-width:230px;max-width:260px">
             {% if l.wa_pitch %}
             <a href="{{ l.wa_pitch }}" target="_blank" class="btn btn-success btn-sm mb-1"
                title="Buka WhatsApp dengan pesan pembuka sudah terisi">
@@ -217,6 +268,10 @@
             <button class="btn btn-outline-primary btn-sm mb-1 btn-pesan"
                     title="Template email & WhatsApp siap salin, plus tandai terkirim">
               <i class="bi bi-envelope-paper"></i> Email/WA
+            </button>
+            <button class="btn btn-outline-danger btn-sm mb-1 btn-pesan" data-tab="proposal"
+                    title="Teks proposal penawaran siap salin">
+              <i class="bi bi-file-earmark-text"></i> Proposal
             </button>
             {% if l.source_url and l.source_url.startswith('http') %}
             <a href="{{ l.source_url }}" target="_blank" class="btn btn-outline-secondary btn-sm mb-1"
@@ -279,7 +334,11 @@
             <label class="form-label mb-1">Subject email pembuka</label>
             <input class="form-control form-control-sm pp mb-2" data-k="tpl_email_subject">
             <label class="form-label mb-1">Email pembuka</label>
-            <textarea class="form-control form-control-sm font-monospace pp" data-k="tpl_email" rows="12"></textarea>
+            <textarea class="form-control form-control-sm font-monospace pp mb-2" data-k="tpl_email" rows="12"></textarea>
+            <label class="form-label mb-1">Subject proposal</label>
+            <input class="form-control form-control-sm pp mb-2" data-k="tpl_proposal_subject">
+            <label class="form-label mb-1">Proposal penawaran <small class="text-muted">(ganti bagian [isi ...] dengan paket &amp; harga Anda)</small></label>
+            <textarea class="form-control form-control-sm font-monospace pp" data-k="tpl_proposal" rows="16"></textarea>
           </div>
           <div class="col-md-6">
             <label class="form-label mb-1">WhatsApp pembuka</label>
@@ -360,6 +419,7 @@
 {% block extra_js %}
 <script src="/static/js/export-picker.js"></script>
 <script src="/static/js/email-popup.js"></script>
+<script src="/static/js/pin-lead.js"></script>
 <script>
 const FILTER_AKTIF = {{ args|tojson }};
 
@@ -397,12 +457,18 @@ function hitungPilih() {
   const bh = document.getElementById('btnHapusPilih');
   bh.disabled = !n;
   bh.innerHTML = `<i class="bi bi-trash me-1"></i>Hapus terpilih${n ? ' (' + n + ')' : ''}`;
+  document.querySelectorAll('[data-pin-massal]').forEach(b => b.disabled = !n);
 }
 document.getElementById('pilihSemua').addEventListener('change', e => {
   document.querySelectorAll('.pilih-baris').forEach(c => c.checked = e.target.checked);
   hitungPilih();
 });
 document.querySelectorAll('.pilih-baris').forEach(c => c.addEventListener('change', hitungPilih));
+PinLead.pasang('/leads/pin', kunciTerpilih);
+
+document.querySelectorAll('.salin').forEach(el => el.addEventListener('click', () => EmailPopup.salin(el.dataset.teks, null)
+  .then(() => { el.classList.replace('bi-clipboard', 'bi-check2'); setTimeout(() => el.classList.replace('bi-check2', 'bi-clipboard'), 1200); })));
+document.querySelectorAll('.salin-semua').forEach(el => el.addEventListener('click', () => EmailPopup.salin(el.dataset.teks, el)));
 
 // ─── Hapus ──────────────────────────────────────────────────────────────────
 const Hapus = (() => {
@@ -505,11 +571,13 @@ function perbaruiBaris(key, d) {
   if (st && d.status) st.value = d.status;
   const tgl = tr.querySelector('input[type="date"]');
   if (tgl && d.tanggal_follow_up !== undefined) tgl.value = d.tanggal_follow_up || '';
+  if (d.tanggal_dihubungi) tr.querySelector('.info-kontak').textContent = 'Dihubungi ' + d.tanggal_dihubungi;
 }
 
 document.querySelectorAll('.btn-pesan').forEach(b => b.addEventListener('click', () =>
   EmailPopup.buka(barisDari(b).dataset.key, perbaruiBaris,
-                  { pesanUrl: '/leads/pesan/', statusUrl: '/leads/update', lampiran: false })));
+                  { pesanUrl: '/leads/pesan/', statusUrl: '/leads/update', lampiran: false,
+                    tab: b.dataset.tab || null })));
 
 const PengaturanPesan = (() => {
   let modal = null;

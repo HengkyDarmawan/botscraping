@@ -46,6 +46,12 @@ def punya_email(row):
     return bool(str(row.get("email") or "").strip())
 
 
+def email_semua(row):
+    """Email utama lalu `email_lain` (dipisah ';'), tanpa duplikat."""
+    daftar = [row.get("email") or ""] + str(row.get("email_lain") or "").split(";")
+    return list(dict.fromkeys(e.strip() for e in daftar if e and e.strip()))
+
+
 def kontak_kurang(row, mode):
     """Alasan lead gugur syarat kontak, atau None bila lolos."""
     wa, em = punya_wa(row), punya_email(row)

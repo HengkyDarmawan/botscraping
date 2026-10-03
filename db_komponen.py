@@ -53,6 +53,7 @@ lewati_hapus = _di_ruang(db.lewati_hapus)
 buang_lead = _di_ruang(db.buang_lead)
 set_lolos = _di_ruang(db.set_lolos)
 hapus_leads = _di_ruang(db.hapus_leads)
+set_pin = _di_ruang(db.set_pin)
 bersihkan_tertunda = _di_ruang(db.bersihkan_tertunda)
 
 
@@ -87,10 +88,11 @@ URUTAN = {
     "nama": "nama_bisnis COLLATE NOCASE ASC",
     "ulasan": "COALESCE(jumlah_ulasan, 0) DESC",
     "follow_up": "tanggal_follow_up IS NULL, tanggal_follow_up ASC",
+    "dihubungi": "COALESCE(tanggal_dihubungi, '') DESC, COALESCE(skor_pembeli, 0) DESC",
 }
 
 
-def _where(f):
+def _where(f, pakai_tab=True):
     where, args = [_AKTIF], []
     if f.get("keys"):
         keys = list(f["keys"])
@@ -110,6 +112,21 @@ def _where(f):
         where.append("COALESCE(whatsapp_link, '') != ''")
     if f.get("punya_email"):
         where.append("COALESCE(email, '') != ''")
+    kondisi = db.kondisi_kontak(f.get("kontak"))
+    if kondisi:
+        where.append(kondisi)
+    if f.get("website") == "ada":
+        where.append("COALESCE(website_utama, '') != ''")
+    elif f.get("website") == "tidak":
+        where.append("COALESCE(website_utama, '') = ''")
+    if f.get("skor_min") is not None:
+        where.append("COALESCE(skor_pembeli, 0) >= ?")
+        args.append(int(f["skor_min"]))
+    if f.get("kanal"):
+        where.append("COALESCE(kanal_kontak, '') LIKE ?")
+        args.append(f"%{f['kanal']}%")
+    if pakai_tab and db._sql_tab(f.get("tab")):
+        where.append(db._sql_tab(f["tab"]))
     if f.get("follow_up"):
         where.append("tanggal_follow_up IS NOT NULL AND tanggal_follow_up <= ?")
         args.append(_hari_ini())
@@ -123,8 +140,8 @@ def _where(f):
     if f.get("q"):
         pola = f"%{f['q']}%"
         where.append("(nama_bisnis LIKE ? OR alamat LIKE ? OR kategori LIKE ? "
-                     "OR email LIKE ? OR telepon LIKE ?)")
-        args += [pola] * 5
+                     "OR email LIKE ? OR email_lain LIKE ? OR telepon LIKE ?)")
+        args += [pola] * 6
     return " WHERE " + " AND ".join(where), args
 
 
@@ -133,7 +150,7 @@ def query(f=None, urut="skor", limit=50, offset=0):
     """Lead aktif sesuai filter. Return (rows, total)."""
     f = f or {}
     klausa, args = _where(f)
-    order = URUTAN.get(urut, URUTAN["skor"])
+    order = db.urutan_dengan_pin(URUTAN.get(urut, URUTAN["skor"]))
     with db._lock:
         conn = db.get_conn()
         total = conn.execute(f"SELECT COUNT(*) AS n FROM businesses{klausa}",
@@ -145,6 +162,12 @@ def query(f=None, urut="skor", limit=50, offset=0):
         else:
             rows = conn.execute(sql, args).fetchall()
     return [dict(r) for r in rows], total
+
+
+@_di_ruang
+def hitung_tab(f=None):
+    """Angka badge nav tab untuk filter aktif (tab sendiri diabaikan)."""
+    return db.hitung_tab(*_where(f or {}, pakai_tab=False))
 
 
 @_di_ruang

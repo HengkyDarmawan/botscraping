@@ -807,8 +807,13 @@ def _filter_dari_request(sumber=None):
         "q": s("q"),
         "run": s("run"),
         "kontak": s("kontak"),
+        "website": s("website"),
+        "kota": s("kota"),
+        "kanal": s("kanal"),
+        "tab": s("tab") if s("tab") != "semua" else None,
         "follow_up": str(a.get("fu")) == "1",
-        "urut": a.get("urut") or "skor_pembeli",
+        # Tab "Sudah Dikontak" paling berguna diurutkan dari kontak terakhir.
+        "urut": a.get("urut") or ("dihubungi" if s("tab") == "sudah" else "skor_pembeli"),
     }
 
 
@@ -816,7 +821,7 @@ def _filter_dari_request(sumber=None):
 def leads():
     from urllib.parse import quote
 
-    from scrapers import pesan_web
+    from scrapers import kontak, pesan_web
     from scrapers.scoring import URUTAN_TIER
 
     filters = _filter_dari_request()
@@ -839,6 +844,8 @@ def leads():
             r["wa_pitch"] = r["whatsapp_link"].split("?")[0] + "?text=" + quote(pesan)
         else:
             r["wa_pitch"] = ""
+        r["nomor_wa"] = kontak.nomor_wa(r)
+        r["email_semua"] = kontak.email_semua(r)
 
     total_halaman = max((total + per_halaman - 1) // per_halaman, 1)
     return render_template(
@@ -846,6 +853,9 @@ def leads():
         leads=rows, total=total, halaman=halaman, total_halaman=total_halaman,
         filters=filters,
         args={k: v for k, v in request.args.items() if k not in ("hal", "kosong")},
+        tabs=db.TAB_LEADS, tab_aktif=filters["tab"] or "semua",
+        jumlah_tab=db.hitung_tab_leads(**filters),
+        opsi_kota=db.nilai_unik("kota"),
         opsi_tier=[t for t in URUTAN_TIER],
         opsi_jasa=db.nilai_unik("jasa_utama"),
         opsi_area=db.nilai_unik("area_pencarian"),
@@ -908,6 +918,17 @@ def leads_update():
                     "tanggal_dihubungi": row.get("tanggal_dihubungi") or ""})
 
 
+@app.route("/leads/pin", methods=["POST"])
+def leads_pin():
+    """Pasang/lepas PIN "lead berpotensi" untuk satu atau banyak lead."""
+    d = request.json or {}
+    keys = d.get("keys") or ([d["place_key"]] if d.get("place_key") else [])
+    if not keys:
+        return jsonify({"ok": False, "error": "Pilih minimal satu lead."}), 400
+    n = db.set_pin(keys, bool(d.get("dipin", True)))
+    return jsonify({"ok": True, "jumlah": n, "dipin": bool(d.get("dipin", True))})
+
+
 @app.route("/leads/pesan/<path:place_key>")
 def leads_pesan(place_key):
     """Template WA & email yang sudah terisi untuk satu lead (popup salin)."""
@@ -915,12 +936,10 @@ def leads_pesan(place_key):
     row = db.get(place_key)
     if not row:
         return jsonify({"ok": False, "error": "Lead tidak ditemukan"}), 404
-    emails = [e.strip() for e in [row.get("email") or ""] +
-              str(row.get("email_lain") or "").split(";") if e.strip()]
     return jsonify({
         "ok": True, "bagian": pesan_web.isi_pesan(row, _pengaturan_pesan()),
-        "urutan": ["pembuka", "fu1", "fu2", "wa"],
-        "nama": row.get("nama_bisnis"), "emails": emails,
+        "urutan": list(pesan_web.URUTAN),
+        "nama": row.get("nama_bisnis"), "emails": kontak.email_semua(row),
         "nomor_wa": kontak.nomor_wa(row), "wa_link": row.get("whatsapp_link") or "",
         "nama_pic": row.get("nama_pic") or "", "status": row.get("status_leads") or "",
     })

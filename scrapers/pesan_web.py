@@ -24,6 +24,7 @@ PLACEHOLDER = {
     "wa_pengirim": "nomor WA Anda",
     "email_pengirim": "email Anda",
     "jasa": "jasa yang paling cocok (hasil analisis)",
+    "jasa_pendukung": "jasa tambahan yang juga cocok (hasil analisis)",
     "alasan": "alasan singkat kenapa jasa itu cocok",
 }
 
@@ -46,6 +47,27 @@ BAWAAN = {
         "Salam,\n{pengirim}\n{usaha}\nWA {wa_pengirim}\n\n"
         "Jika penawaran ini tidak sesuai, cukup balas email ini dan saya tidak akan "
         "menghubungi kembali."),
+    "tpl_proposal_subject": "Penawaran {jasa} untuk {nama}",
+    "tpl_proposal": (
+        "Selamat siang {sapaan},\n\n"
+        "Perkenalkan, saya {pengirim} dari {usaha}. Berikut penawaran singkat kami "
+        "untuk {nama}.\n\n"
+        "Yang kami temukan\n"
+        "{alasan}\n\n"
+        "Yang kami tawarkan\n"
+        "Jasa utama: {jasa}\n"
+        "Pendukung: {jasa_pendukung}\n\n"
+        "Ruang lingkup\n"
+        "1. Analisis kebutuhan dan target pelanggan {nama}\n"
+        "2. Pengerjaan {jasa} sesuai yang disepakati\n"
+        "3. Revisi sampai sesuai, lalu serah terima dan panduan singkat\n\n"
+        "Investasi\n"
+        "[isi kisaran harga & paket]\n\n"
+        "Waktu pengerjaan\n"
+        "[isi estimasi waktu pengerjaan]\n\n"
+        "Kalau berkenan, saya bisa kirimkan contoh hasil kerja untuk usaha yang mirip "
+        "atau menjadwalkan obrolan singkat 15 menit. Cukup balas pesan ini.\n\n"
+        "Salam,\n{pengirim}\n{usaha}\nWA {wa_pengirim}\n{email_pengirim}"),
     "tpl_fu1": (
         "Selamat siang {sapaan},\n\n"
         "Saya ingin menindaklanjuti email saya beberapa hari lalu soal {jasa} untuk "
@@ -60,6 +82,9 @@ BAWAAN = {
         "Terima kasih, semoga usahanya lancar selalu.\n\n"
         "Salam,\n{pengirim}\n{usaha}"),
 }
+
+# Urutan tab di popup Email/WA.
+URUTAN = ("pembuka", "proposal", "fu1", "fu2", "wa")
 
 _ALASAN_CADANGAN = ("Ada beberapa hal di profil online bisnis Anda yang menurut saya "
                     "bisa membantu mendatangkan lebih banyak pelanggan.")
@@ -82,7 +107,7 @@ class _Isian(dict):
 
 def isi_pesan(row, atur):
     """
-    {pembuka, fu1, fu2, wa} → {judul, subject, catatan, isi, sisa} untuk satu lead.
+    {pembuka, proposal, fu1, fu2, wa} → {judul, subject, catatan, isi, sisa} untuk satu lead.
 
     Identitas pengirim yang belum diisi muncul sebagai "[isi nomor WA]" dan
     dilaporkan di `sisa`, supaya tidak terkirim pesan dengan tanda tangan bolong.
@@ -93,6 +118,7 @@ def isi_pesan(row, atur):
         "sapaan": pic or "Bapak/Ibu",
         "jasa": str(row.get("jasa_utama") or "").strip() or "pengembangan bisnis online",
         "alasan": str(row.get("alasan_pitch") or "").strip() or _ALASAN_CADANGAN,
+        "jasa_pendukung": str(row.get("jasa_pendukung") or "").replace(" | ", ", ").strip() or "-",
     })
     for k in ("pengirim", "usaha", "wa_pengirim", "email_pengirim"):
         isian[k] = str(atur.get(k) or "").strip() or _KOSONG[k]
@@ -104,6 +130,9 @@ def isi_pesan(row, atur):
     hasil = {
         "pembuka": {"judul": "Email Pembuka", "subject": subjek, "catatan": "",
                     "isi": isi(atur.get("tpl_email"))},
+        "proposal": {"judul": "Proposal", "subject": isi(atur.get("tpl_proposal_subject")),
+                     "catatan": "Penawaran lengkap siap salin: tempel ke email atau WA.",
+                     "isi": isi(atur.get("tpl_proposal"))},
         "fu1": {"judul": "Follow-up H+3", "subject": "Re: " + subjek,
                 "catatan": "Kirim sebagai balasan di thread email yang sama.",
                 "isi": isi(atur.get("tpl_fu1"))},
