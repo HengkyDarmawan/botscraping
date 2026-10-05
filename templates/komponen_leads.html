@@ -115,6 +115,12 @@
           {% endfor %}
         </select>
       </div>
+      <div class="col-6 col-md-2 d-flex align-items-end">
+        <div class="form-check mb-1" title="Lead yang emailnya juga dipakai lead lain (biasanya cabang jaringan yang sama)">
+          <input class="form-check-input" type="checkbox" name="ganda" value="1" id="fGanda" {% if f.email_ganda %}checked{% endif %}>
+          <label class="form-check-label small" for="fGanda">Email ganda{% if jumlah_ganda %} ({{ jumlah_ganda }}){% endif %}</label>
+        </div>
+      </div>
       {% if f.run %}<input type="hidden" name="run" value="{{ f.run }}">{% endif %}
       {% if f.tab %}<input type="hidden" name="tab" value="{{ f.tab }}">{% endif %}
       <div class="col-12 col-md-3 d-flex gap-2 justify-content-md-end">
@@ -131,6 +137,9 @@
     <span><strong>{{ total }}</strong> lead aktif cocok{% if f.run %} (dari satu run){% endif %}
       · <span id="jmlPilih">0</span> dipilih</span>
     <div class="d-flex flex-wrap gap-2">
+      <button class="btn btn-primary btn-sm" onclick="FormLead.tambah()">
+        <i class="bi bi-plus-lg me-1"></i>Tambah lead manual
+      </button>
       <button class="btn btn-success btn-sm" onclick="bukaExport()">
         <i class="bi bi-file-earmark-excel me-1"></i>Export (pilih kolom)
       </button>
@@ -177,7 +186,13 @@
             <button type="button" class="btn btn-link btn-sm p-0 btn-pin"></button>
           </td>
           <td style="max-width:300px">
-            <div class="fw-semibold">{{ l.nama_bisnis or '-' }}</div>
+            <div class="fw-semibold nama-lead">{{ l.nama_bisnis or '-' }}</div>
+            {% if l.place_key.startswith('manual:') %}<span class="badge bg-secondary-subtle text-secondary-emphasis" style="font-size:.62rem">Manual</span>{% endif %}
+            {% if l.email_ganda %}<span class="badge bg-warning-subtle text-warning-emphasis" style="font-size:.62rem"
+                title="Email sama dengan: {{ l.email_ganda|join(', ') }}"><i class="bi bi-exclamation-triangle"></i> email sama dengan {{ l.email_ganda|length }} lead</span>{% endif %}
+            {% if l.nama_gmaps and l.nama_gmaps != l.nama_bisnis %}
+            <small class="text-muted d-block text-truncate" style="max-width:300px;font-size:.68rem" title="{{ l.nama_gmaps }}">Nama di GMaps: {{ l.nama_gmaps }}</small>
+            {% endif %}
             <small class="text-muted d-block">
               <span class="badge bg-info-subtle text-info-emphasis">{{ l.segmen or 'Lainnya' }}</span>
               {{ l.kategori or '' }}{% if l.rating %} · ⭐{{ l.rating }}{% if l.jumlah_ulasan is not none %} ({{ l.jumlah_ulasan }}){% endif %}{% endif %}
@@ -241,6 +256,8 @@
             <a href="{{ l.source_url }}" target="_blank" class="btn btn-outline-secondary btn-sm mb-1" title="Buka di Google Maps">
               <i class="bi bi-geo-alt"></i></a>
             {% endif %}
+            <button class="btn btn-outline-secondary btn-sm mb-1 btn-edit" title="Edit nama & kontak">
+              <i class="bi bi-pencil"></i></button>
             <button class="btn btn-outline-danger btn-sm mb-1 btn-hapus" title="Hapus lead ini">
               <i class="bi bi-trash"></i></button>
             <div class="small text-muted info-proposal" style="font-size:.68rem">
@@ -374,6 +391,80 @@
       </div>
       <div class="modal-footer">
         <button class="btn btn-primary" onclick="Pengaturan.simpan()">Simpan</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Tambah / edit lead -->
+<div class="modal fade" id="leadModal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="flJudul"></h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="row g-2">
+          <div class="col-md-8">
+            <label class="form-label mb-1" for="fl_nama_bisnis">Nama bisnis <span class="text-danger">*</span></label>
+            <input class="form-control form-control-sm" id="fl_nama_bisnis" data-kolom="nama_bisnis"
+                   placeholder="mis. CV Maju Jaya Komputer">
+            <div class="form-text" style="font-size:.72rem" id="flNamaGmaps"></div>
+          </div>
+          <div class="col-md-4">
+            <label class="form-label mb-1" for="fl_segmen">Segmen</label>
+            <select class="form-select form-select-sm" id="fl_segmen" data-kolom="segmen">
+              <option value="">Otomatis (dari kategori/nama)</option>
+              {% for s in opsi_segmen_edit %}<option value="{{ s }}">{{ s }}</option>{% endfor %}
+            </select>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label mb-1" for="fl_kategori">Kategori / jenis usaha</label>
+            <input class="form-control form-control-sm" id="fl_kategori" data-kolom="kategori" placeholder="mis. Toko komputer">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label mb-1" for="fl_kota">Kota</label>
+            <input class="form-control form-control-sm" id="fl_kota" data-kolom="kota">
+          </div>
+          <div class="col-12">
+            <label class="form-label mb-1" for="fl_alamat">Alamat</label>
+            <input class="form-control form-control-sm" id="fl_alamat" data-kolom="alamat">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label mb-1" for="fl_telepon">Telepon / WhatsApp</label>
+            <input class="form-control form-control-sm" id="fl_telepon" data-kolom="telepon" placeholder="08xx">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label mb-1" for="fl_nama_pic">Nama PIC</label>
+            <input class="form-control form-control-sm" id="fl_nama_pic" data-kolom="nama_pic">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label mb-1" for="fl_email">Email</label>
+            <input type="email" class="form-control form-control-sm" id="fl_email" data-kolom="email">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label mb-1" for="fl_email_lain">Email lain</label>
+            <input class="form-control form-control-sm" id="fl_email_lain" data-kolom="email_lain"
+                   placeholder="pisahkan dengan koma">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label mb-1" for="fl_website">Website</label>
+            <input class="form-control form-control-sm" id="fl_website" data-kolom="website" placeholder="https://...">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label mb-1" for="fl_instagram">Instagram</label>
+            <input class="form-control form-control-sm" id="fl_instagram" data-kolom="instagram" placeholder="@akun atau URL">
+          </div>
+        </div>
+        <div class="form-text mt-2" style="font-size:.72rem" id="flInfoKunci"></div>
+        <div id="flPeringatan" class="alert alert-warning py-2 small mt-2 d-none"></div>
+        <div id="flGalat" class="text-danger small mt-2"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline-secondary" data-bs-dismiss="modal">Batal</button>
+        <button class="btn btn-warning d-none" id="flPaksa"><i class="bi bi-exclamation-triangle me-1"></i>Simpan tetap</button>
+        <button class="btn btn-primary" id="flSimpan"><i class="bi bi-check-lg me-1"></i>Simpan</button>
       </div>
     </div>
   </div>
@@ -546,7 +637,7 @@ const Hapus = (() => {
   }
 
   function satu(key) {
-    const nama = document.querySelector(`tr[data-key="${CSS.escape(key)}"] .fw-semibold`).textContent.trim();
+    const nama = document.querySelector(`tr[data-key="${CSS.escape(key)}"] .nama-lead`).textContent.trim();
     buka('keys', [key], `Hapus <strong>${escapeHtml(nama)}</strong> dari Leads Komponen?`);
   }
   function terpilih() {
@@ -627,6 +718,79 @@ const Pengaturan = (() => {
     modal.hide();
   }
   return { buka, simpan };
+})();
+
+// ─── Tambah / edit lead ─────────────────────────────────────────────────────
+const FormLead = (() => {
+  const isian = [...document.querySelectorAll('#leadModal [data-kolom]')];
+  let modal = null, key = null;
+
+  function buka(judul, data) {
+    document.getElementById('flJudul').innerHTML = judul;
+    isian.forEach(el => el.value = data[el.dataset.kolom] || '');
+    const asli = data.nama_gmaps && data.nama_gmaps !== data.nama_bisnis ? data.nama_gmaps : '';
+    document.getElementById('flNamaGmaps').textContent = asli ? 'Nama di Google Maps: ' + asli : '';
+    const kunci = (data.kolom_dikunci || '').split(',').filter(Boolean);
+    document.getElementById('flInfoKunci').innerHTML = key
+      ? '<i class="bi bi-lock me-1"></i>Kolom yang Anda ubah tidak akan ditimpa saat bisnis ini di-scrape ulang.'
+        + (kunci.length ? ' Sudah dikunci: ' + kunci.map(escapeHtml).join(', ') + '.' : '')
+      : 'Lead manual tidak terhubung ke Google Maps. Skor prioritas dihitung otomatis dari segmen & kontak.';
+    tampilPeringatan([]);
+    document.getElementById('flGalat').textContent = '';
+    modal = modal || new bootstrap.Modal(document.getElementById('leadModal'));
+    modal.show();
+    setTimeout(() => document.getElementById('fl_nama_bisnis').focus(), 300);
+  }
+
+  function tambah() {
+    key = null;
+    buka('<i class="bi bi-plus-lg me-2"></i>Tambah lead manual', {});
+  }
+
+  async function edit(k) {
+    const d = await (await fetch('/komponen/detail/' + encodeURIComponent(k))).json();
+    if (d.error) { alert(d.error); return; }
+    key = k;
+    // Segmen yang belum dikunci user = hasil otomatis → tampil "Otomatis".
+    if (!(d.kolom_dikunci || '').split(',').includes('segmen')) d.segmen = '';
+    buka('<i class="bi bi-pencil me-2"></i>Edit lead', d);
+  }
+
+  function tampilPeringatan(daftar) {
+    const el = document.getElementById('flPeringatan');
+    el.classList.toggle('d-none', !daftar.length);
+    el.innerHTML = daftar.length
+      ? '<strong>Periksa dulu:</strong><br>' + daftar.map(escapeHtml).join('<br>')
+        + '<br><span class="text-muted">Tekan "Simpan tetap" bila memang lead berbeda.</span>' : '';
+    document.getElementById('flPaksa').classList.toggle('d-none', !daftar.length);
+  }
+
+  async function simpan(paksa) {
+    const body = { paksa };
+    isian.forEach(el => body[el.dataset.kolom] = el.value);
+    if (key) body.place_key = key;
+    const galat = document.getElementById('flGalat');
+    galat.textContent = '';
+    const tombol = [document.getElementById('flSimpan'), document.getElementById('flPaksa')];
+    tombol.forEach(b => b.disabled = true);
+    try {
+      const d = await (await fetch(key ? '/komponen/edit' : '/komponen/tambah', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+      })).json();
+      if (d.peringatan) { tampilPeringatan(d.peringatan); return; }
+      if (!d.ok) { galat.textContent = d.error || 'Gagal menyimpan.'; return; }
+      window.location.reload();
+    } catch (e) {
+      galat.textContent = 'Tidak bisa menghubungi server.';
+    } finally {
+      tombol.forEach(b => b.disabled = false);
+    }
+  }
+
+  document.getElementById('flSimpan').addEventListener('click', () => simpan(false));
+  document.getElementById('flPaksa').addEventListener('click', () => simpan(true));
+  document.querySelectorAll('.btn-edit').forEach(b => b.addEventListener('click', () => edit(barisDari(b).dataset.key)));
+  return { tambah, edit };
 })();
 </script>
 {% endblock %}

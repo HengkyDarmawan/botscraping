@@ -116,7 +116,7 @@
               <li><strong>Tutup permanen / sementara</strong> dilewati, termasuk yang pemiliknya
                 sendiri menulis "sudah tutup" di balasan ulasan.</li>
               <li>Bisnis tanpa kontak yang diminta tidak dijadikan lead.</li>
-              <li>Bisnis yang sudah pernah dilewati tidak dibuka lagi (tutup: 6 bulan, kontak: 30 hari).</li>
+              <li>Bisnis yang sudah pernah dilewati tidak dibuka lagi (tutup: 6 bulan, kontak: 30 hari, email ganda: 6 bulan).</li>
             </ul>
             <div class="form-check form-switch">
               <input class="form-check-input" type="checkbox" id="enrichWebsite" checked
@@ -128,6 +128,17 @@
             <div class="form-text ps-4" style="font-size:.72rem">
               Email hanya bisa didapat dari website bisnis. Banyak toko yang di Google
               Maps hanya mencantumkan telepon kantor ternyata punya nomor WA di websitenya.
+            </div>
+            <div class="form-check form-switch mt-2">
+              <input class="form-check-input" type="checkbox" id="lewatiEmailGanda" checked>
+              <label class="form-check-label" for="lewatiEmailGanda">
+                Lewati bisnis yang emailnya sudah ada di Leads Komponen
+              </label>
+            </div>
+            <div class="form-text ps-4" style="font-size:.72rem">
+              Cabang jaringan yang sama (mis. KLA, Sentral Display) biasanya memakai satu email —
+              cukup satu penawaran. Kalau cabangnya punya email lain yang belum ada, tetap diambil
+              dengan email barunya saja.
             </div>
             <hr class="my-2">
             <div class="form-check form-switch">
@@ -380,6 +391,7 @@ function runKomponen() {
     radius_km: parseFloat(document.getElementById('radiusKm').value) || 0,
     mode_kontak: document.getElementById('modeKontak').value,
     enrich_website: document.getElementById('enrichWebsite').checked,
+    lewati_email_ganda: document.getElementById('lewatiEmailGanda').checked,
     dedup_enabled: document.getElementById('dedupEnabled').checked,
     dedup_bulan: parseInt(document.getElementById('dedupBulan').value) || 6,
     refresh_kontak: true,

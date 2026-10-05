@@ -140,6 +140,7 @@ def _filter(sumber=None):
         "kanal": s("kanal"),
         "tab": tab if tab and tab != "semua" else None,
         "follow_up": a.get("fu") == "1", "run": s("run"),
+        "email_ganda": a.get("ganda") == "1",
     }
 
 
@@ -158,9 +159,11 @@ def leads():
     per = 50
     hal = _halaman(request.args.get("hal"))
     rows, total = dk.query(f, urut=urut, limit=per, offset=(hal - 1) * per)
+    ganda = dk.peta_email_ganda()
     for r in rows:
         r["nomor_wa"] = kontak.nomor_wa(r)
         r["email_semua"] = kontak.email_semua(r)
+        r["email_ganda"] = ganda.get(r["place_key"], [])
     total_hal = max((total + per - 1) // per, 1)
     return render_template(
         "komponen_leads.html", leads=rows, total=total, halaman=hal,
@@ -170,6 +173,7 @@ def leads():
         opsi_segmen=dk.nilai_unik("segmen"), opsi_tier=komponen.URUTAN_TIER,
         opsi_area=dk.nilai_unik("area_pencarian"), opsi_kota=dk.nilai_unik("kota"),
         opsi_status=komponen.STATUS_PILIHAN, stats=dk.stats(),
+        opsi_segmen_edit=komponen.NAMA_SEGMEN, jumlah_ganda=len(ganda),
         atur=dk.pengaturan(), masalah_template=dok.cek_template(),
         ada_profil=bool(dok.company_profile()),
     )
@@ -212,6 +216,47 @@ def detail(place_key):
     with db.ruang(dk.RUANG):
         row["perubahan"] = db.perubahan_terbaru(place_key, batas=20)
     return jsonify(row)
+
+
+def _tolak_input(d, kecuali=None):
+    """Respons galat/peringatan untuk form tambah/edit lead, atau None bila aman."""
+    if not str(d.get("nama_bisnis") or "").strip():
+        return jsonify({"ok": False, "error": "Nama bisnis wajib diisi."}), 400
+    # Edit tidak menuntut kontak: lead hasil scrape bisa saja hanya punya IG.
+    if not kecuali and not any(str(d.get(k) or "").strip()
+                               for k in ("telepon", "email", "email_lain")):
+        return jsonify({"ok": False,
+                        "error": "Isi minimal satu kontak: telepon/WhatsApp atau email."}), 400
+    if not d.get("paksa"):
+        peringatan = dk.cek_bentrok(d, kecuali=kecuali)
+        if peringatan:
+            return jsonify({"ok": False, "peringatan": peringatan})
+    return None
+
+
+@bp.route("/komponen/tambah", methods=["POST"])
+def tambah():
+    """Tambah lead manual (di luar Google Maps)."""
+    d = request.json or {}
+    tolak = _tolak_input(d)
+    if tolak:
+        return tolak
+    key = dk.tambah_manual(d)
+    return jsonify({"ok": True, "place_key": key, "stats": dk.stats()})
+
+
+@bp.route("/komponen/edit", methods=["POST"])
+def edit():
+    """Ubah nama/kontak satu lead. Kolom yang diubah tidak ditimpa scraping ulang."""
+    d = request.json or {}
+    key = d.get("place_key")
+    if not key or not dk.get(key):
+        return jsonify({"ok": False, "error": "Lead tidak ditemukan"}), 404
+    tolak = _tolak_input(d, kecuali=key)
+    if tolak:
+        return tolak
+    row = dk.edit_lead(key, d)
+    return jsonify({"ok": True, "nama": row.get("nama_bisnis")})
 
 
 @bp.route("/komponen/hapus", methods=["POST"])

@@ -10,9 +10,12 @@ Setiap fungsi publik memaksa ruang "komponen", jadi aman dipanggil dari route
 Flask maupun thread scraper tanpa perlu membungkusnya lagi.
 """
 import functools
+import re
+import uuid
 from datetime import datetime
 
 import db
+from scrapers import komponen, kontak
 from scrapers.komponen import (KATEGORI_DIKECUALIKAN, STATUS_BELUM, STATUS_SELESAI,
                                STATUS_TANPA_EXPORT)
 
@@ -137,11 +140,16 @@ def _where(f, pakai_tab=True):
         where.append(f"COALESCE(status_leads, '{STATUS_BELUM}') NOT IN "
                      f"({','.join('?' * len(STATUS_TANPA_EXPORT))})")
         args += list(STATUS_TANPA_EXPORT)
+    if f.get("email_ganda"):
+        keys = list(db.peta_email_ganda()) or [""]
+        where.append(f"place_key IN ({','.join('?' * len(keys))})")
+        args += keys
     if f.get("q"):
         pola = f"%{f['q']}%"
-        where.append("(nama_bisnis LIKE ? OR alamat LIKE ? OR kategori LIKE ? "
-                     "OR email LIKE ? OR email_lain LIKE ? OR telepon LIKE ?)")
-        args += [pola] * 6
+        where.append("(nama_bisnis LIKE ? OR nama_gmaps LIKE ? OR alamat LIKE ? "
+                     "OR kategori LIKE ? OR email LIKE ? OR email_lain LIKE ? "
+                     "OR telepon LIKE ?)")
+        args += [pola] * 7
     return " WHERE " + " AND ".join(where), args
 
 
@@ -211,6 +219,150 @@ def stats():
                 "SELECT COUNT(*) AS n FROM nomor_surat WHERE tanggal = ?", (_hari_ini(),)),
             "dilewati": satu("SELECT COUNT(*) AS n FROM dilewati"),
         }
+
+
+# ─── Tambah manual & edit lead ───────────────────────────────────────────────
+
+# Kolom yang boleh diisi/diubah user lewat form. Kolom yang diedit masuk
+# `kolom_dikunci`, jadi scraping ulang tidak menimpanya.
+KOLOM_EDIT = ("nama_bisnis", "kategori", "segmen", "alamat", "kota", "telepon",
+              "email", "email_lain", "website", "instagram", "nama_pic")
+AWALAN_MANUAL = "manual:"
+
+
+def _bersihkan_input(data):
+    """Nilai form → nilai kolom yang rapi. Hanya kolom KOLOM_EDIT yang dikirim."""
+    hasil = {}
+    for k in KOLOM_EDIT:
+        if k not in (data or {}):
+            continue
+        v = re.sub(r"\s+", " ", str(data.get(k) or "")).strip()
+        if k == "email":
+            v = v.lower()
+        elif k == "email_lain":
+            v = "; ".join(dict.fromkeys(
+                e.lower() for e in re.split(r"[;,\s]+", v) if e.strip()))
+        elif k == "website" and v and not re.match(r"https?://", v, re.I):
+            v = "https://" + v
+        elif k == "instagram" and v and not re.match(r"https?://", v, re.I):
+            v = "https://www.instagram.com/" + v.lstrip("@").strip("/")
+        hasil[k] = v
+    if hasil.get("segmen") and hasil["segmen"] not in komponen.NAMA_SEGMEN:
+        hasil["segmen"] = ""
+    return hasil
+
+
+def _digit_telepon(nomor):
+    d = re.sub(r"\D", "", str(nomor or ""))
+    return d[-9:] if len(d) >= 8 else ""
+
+
+@_di_ruang
+def cek_bentrok(data, kecuali=None):
+    """
+    Peringatan sebelum menyimpan lead manual/editan: email yang sudah dipakai
+    lead lain, nomor telepon sama, atau nama persis sama. List teks (kosong = aman).
+
+    Saat edit (`kecuali` = lead yang diedit), hanya nilai yang BERUBAH yang
+    diperiksa — cabang yang sudah terlanjur berbagi email tidak diperingatkan
+    ulang setiap kali namanya diedit.
+    """
+    d = _bersihkan_input(data)
+    lama = (db.get(kecuali) or {}) if kecuali else {}
+    pesan = []
+    sudah = {e.lower() for e in kontak.email_semua(lama)}
+    emails = [e for e in [d.get("email")] + str(d.get("email_lain") or "").split(";")
+              if e and e.strip().lower() not in sudah]
+    for email, nama in db.email_dipakai(emails, kecuali).items():
+        pesan.append(f"Email {email} sudah dipakai lead \"{nama}\".")
+    tel = _digit_telepon(d.get("telepon"))
+    if tel and tel == _digit_telepon(lama.get("telepon")):
+        tel = ""
+    nama = (d.get("nama_bisnis") or "").lower()
+    if nama == (lama.get("nama_bisnis") or "").lower():
+        nama = ""
+    with db._lock:
+        rows = db.get_conn().execute(
+            "SELECT place_key, nama_bisnis, telepon FROM businesses WHERE place_key != ? "
+            "AND (COALESCE(telepon, '') != '' OR LOWER(COALESCE(nama_bisnis, '')) = ?)",
+            (kecuali or "", nama)).fetchall()
+    for r in rows:
+        if tel and _digit_telepon(r["telepon"]) == tel:
+            pesan.append(f"Nomor {d['telepon']} sudah dipakai lead \"{r['nama_bisnis']}\".")
+        elif nama and (r["nama_bisnis"] or "").lower() == nama:
+            pesan.append(f"Sudah ada lead bernama \"{r['nama_bisnis']}\".")
+    return list(dict.fromkeys(pesan))[:6]
+
+
+@_di_ruang
+def tambah_manual(data):
+    """Simpan lead yang diinput user (bukan dari Google Maps). Return place_key."""
+    row = _bersihkan_input(data)
+    if row.get("segmen"):
+        row["kolom_dikunci"] = "segmen"
+    else:
+        row.pop("segmen", None)
+    row.update(place_key=AWALAN_MANUAL + uuid.uuid4().hex[:12],
+               area_pencarian="Input manual", lolos_filter=1)
+    db.upsert_business(row)
+    return row["place_key"]
+
+
+# Kolom turunan yang ikut berubah saat lead diedit (dihitung ulang nilai_lead).
+_KOLOM_TURUNAN = ("whatsapp_link", "whatsapp_lain", "website_utama", "instagram",
+                  "tokopedia", "shopee", "marketplace_lain", "linkedin", "youtube",
+                  "segmen", "skor_pembeli", "tier", "alasan_pitch", "skor_popularitas")
+
+
+@_di_ruang
+def edit_lead(place_key, data):
+    """
+    Ubah kolom KOLOM_EDIT satu lead, kunci kolom yang berubah, dan hitung ulang
+    skor/segmen/link WA. Segmen kosong = kembali otomatis. Return baris terbaru.
+    """
+    lama = db.get(place_key)
+    if not lama:
+        return None
+    baru = _bersihkan_input(data)
+    kunci = db.kolom_terkunci(lama)
+    if "segmen" in baru and not baru["segmen"]:
+        baru.pop("segmen")
+        kunci.discard("segmen")
+    # Dibandingkan dengan nilai lama yang dirapikan dengan cara yang sama, supaya
+    # beda huruf besar / pemisah email saja tidak dianggap "diedit" lalu dikunci.
+    lama_rapi = _bersihkan_input({k: lama.get(k) for k in baru})
+    berubah = {k: v for k, v in baru.items() if lama_rapi.get(k, "") != v}
+    if "segmen" in baru:
+        kunci.add("segmen")
+    # nama_pic sudah milik user (tidak pernah ditimpa scraping) — tak perlu dikunci.
+    kunci |= set(berubah) - {"nama_pic"}
+
+    row = dict(lama)
+    row.update(berubah)
+    row["kolom_dikunci"] = ",".join(sorted(kunci))
+    if ("nama_bisnis" in berubah and not lama.get("nama_gmaps")
+            and not str(place_key).startswith(AWALAN_MANUAL)):
+        row["nama_gmaps"] = lama.get("nama_bisnis")
+    if "telepon" in berubah:
+        row["whatsapp_link"] = ""   # dihitung ulang dari nomor baru
+    if "website" in berubah:
+        row["website_utama"] = ""
+    komponen.nilai_lead(row, jumlah_cabang=db.hitung_cabang(row.get("nama_bisnis")))
+
+    simpan = list(dict.fromkeys(list(berubah) + ["kolom_dikunci", "nama_gmaps"]
+                                + list(_KOLOM_TURUNAN)))
+    with db._lock:
+        conn = db.get_conn()
+        conn.execute(
+            f"UPDATE businesses SET {', '.join(f'{k} = ?' for k in simpan)} "
+            f"WHERE place_key = ?", [row.get(k) for k in simpan] + [place_key])
+        conn.commit()
+    return db.get(place_key)
+
+
+@_di_ruang
+def peta_email_ganda():
+    return db.peta_email_ganda()
 
 
 # ─── Update CRM & pengaturan (implementasi generik di db.py) ─────────────────

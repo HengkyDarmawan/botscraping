@@ -332,6 +332,10 @@ KOLOM_KOMPONEN = {
     "proposal_nomor":   "TEXT",
     "proposal_tanggal": "TEXT",
     "proposal_file":    "TEXT",
+    # Kolom yang diedit user (dipisah koma) — tidak ditimpa scraping ulang.
+    "kolom_dikunci":    "TEXT",
+    # Nama asli dari Google Maps, disimpan saat user mengganti nama_bisnis.
+    "nama_gmaps":       "TEXT",
 }
 
 # Tabel bersama kedua ruang.
@@ -585,6 +589,12 @@ def _kolom_tabel():
         return [r["name"] for r in cur.fetchall()]
 
 
+def kolom_terkunci(row):
+    """Himpunan kolom yang diedit user pada baris ini (tidak boleh ditimpa scraping)."""
+    return {k.strip() for k in str((row or {}).get("kolom_dikunci") or "").split(",")
+            if k.strip()}
+
+
 # ─── Tulis ────────────────────────────────────────────────────────────────────
 
 def upsert_business(row, sentuh_scrape=True):
@@ -650,6 +660,15 @@ def upsert_business(row, sentuh_scrape=True):
             return "insert"
 
         for k in _KOLOM_MILIK_USER:
+            data.pop(k, None)
+        dikunci = kolom_terkunci(ada)
+        # Nama hasil scrape untuk lead yang namanya diedit user disimpan sebagai
+        # nama_gmaps (kecuali itu sebenarnya nama editan yang sudah dipulihkan
+        # _lengkapi_dari_db).
+        if "nama_bisnis" in dikunci and "nama_gmaps" in kolom_valid \
+                and data.get("nama_bisnis") not in (None, "", ada.get("nama_bisnis")):
+            data["nama_gmaps"] = data["nama_bisnis"]
+        for k in dikunci | {"kolom_dikunci"}:
             data.pop(k, None)
         # Nilai None berarti "tidak berhasil diekstrak kali ini", bukan "sekarang
         # kosong". Menimpanya akan menghapus data bagus yang sudah tersimpan —
@@ -758,7 +777,8 @@ def perubahan_terbaru(place_key=None, batas=100):
 
 # Berapa hari bisnis yang dilewati tidak dibuka lagi. None = selamanya
 # ("manual": user menghapus lead salah scrape dan memilih jangan diambil lagi).
-HARI_LEWATI = {"tutup": 180, "kontak": 30, "manual": None}
+# "email": semua emailnya sudah dipakai lead lain (cabang jaringan yang sama).
+HARI_LEWATI = {"tutup": 180, "kontak": 30, "manual": None, "email": 180}
 
 # Lead "aktif" = lolos syarat saat scraping dan tidak tutup. Daftar, hitungan,
 # dan export hanya membaca baris ini.
@@ -830,6 +850,65 @@ def kondisi_kontak(kontak, kolom_email="email"):
 def urutan_dengan_pin(order):
     """Lead yang di-PIN selalu di atas, lalu urutan pilihan user."""
     return f"COALESCE(dipin, 0) DESC, {order}"
+
+
+# ─── Email ganda (satu perusahaan, banyak cabang di Google Maps) ─────────────
+
+def _email_baris(email, email_lain):
+    """Semua email satu baris, huruf kecil, tanpa duplikat."""
+    daftar = [email or ""] + str(email_lain or "").split(";")
+    return list(dict.fromkeys(e.strip().lower() for e in daftar if e and e.strip()))
+
+
+def email_dipakai(emails, kecuali=None):
+    """
+    {email (huruf kecil): nama_bisnis} untuk email di `emails` yang sudah
+    tercatat di baris LAIN ruang aktif (kolom email maupun email_lain).
+    Baris tersembunyi ikut dihitung: lead tertunda dari target yang sama juga
+    calon penerima penawaran.
+    """
+    dicari = list(dict.fromkeys(e.strip().lower() for e in emails or [] if e and e.strip()))
+    if not dicari:
+        return {}
+    gabung = "LOWER(COALESCE(email, '') || ';' || COALESCE(email_lain, ''))"
+    sql = (f"SELECT place_key, nama_bisnis, email, email_lain FROM businesses "
+           f"WHERE place_key != ? AND ({' OR '.join([gabung + ' LIKE ?'] * len(dicari))})")
+    with _lock:
+        rows = get_conn().execute(
+            sql, [kecuali or ""] + [f"%{e}%" for e in dicari]).fetchall()
+    hasil = {}
+    for r in rows:
+        milik = set(_email_baris(r["email"], r["email_lain"]))
+        for e in dicari:
+            if e in milik and e not in hasil:
+                hasil[e] = r["nama_bisnis"] or r["place_key"]
+    return hasil
+
+
+def peta_email_ganda():
+    """
+    {place_key: [nama lead lain yang berbagi email]} untuk lead aktif yang
+    salah satu emailnya juga dipakai lead aktif lain.
+    """
+    with _lock:
+        rows = get_conn().execute(
+            f"SELECT place_key, nama_bisnis, email, email_lain FROM businesses "
+            f"WHERE {SQL_AKTIF} AND (COALESCE(email, '') != '' "
+            f"OR COALESCE(email_lain, '') != '')").fetchall()
+    pemilik = {}
+    for r in rows:
+        for e in _email_baris(r["email"], r["email_lain"]):
+            pemilik.setdefault(e, []).append((r["place_key"], r["nama_bisnis"] or ""))
+    peta = {}
+    for daftar in pemilik.values():
+        if len(daftar) < 2:
+            continue
+        for key, _ in daftar:
+            lain = peta.setdefault(key, [])
+            for k2, nama in daftar:
+                if k2 != key and nama not in lain:
+                    lain.append(nama)
+    return peta
 
 
 def lewati_catat(place_key, nama, alasan, jenis="kontak", mode=""):

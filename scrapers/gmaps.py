@@ -1076,7 +1076,25 @@ def _lengkapi_dari_db(row):
     for field in _FIELD_WARISAN:
         if row.get(field) in (None, "") and lama.get(field) not in (None, ""):
             row[field] = lama[field]
+    # Kolom yang diedit user menang atas hasil scrape, supaya skor dihitung dari
+    # data editan (upsert_business juga tidak akan menimpanya).
+    dikunci = db.kolom_terkunci(lama)
+    if "nama_bisnis" in dikunci and row.get("nama_bisnis"):
+        row["nama_gmaps"] = row["nama_bisnis"]   # nama terbaru di Google Maps
+    for field in dikunci:
+        if field in lama:
+            row[field] = lama[field]
+    if lama.get("kolom_dikunci"):
+        row["kolom_dikunci"] = lama["kolom_dikunci"]
     return row
+
+
+def _cek_email_ganda(row, filters):
+    """Alasan lead dilewati karena semua emailnya sudah dipakai lead lain, atau None."""
+    if not filters.get("lewati_email_ganda"):
+        return None
+    dipakai = db.email_dipakai(kontak.email_semua(row), row.get("place_key"))
+    return kontak.saring_email(row, dipakai)
 
 
 def _simpan_segera(row, run_id, jenis, cb, profil=None):
@@ -1192,7 +1210,7 @@ async def _scrape_query(browser, ua, query, area_tag, max_results, params, cb,
     FEED = 'div[role="feed"]'
     hasil = {"baru": [], "update": [], "dilewati": 0, "filter_awal": 0,
              "gagal": 0, "dari_kartu": 0, "tutup": 0, "kontak_kurang": 0,
-             "filter_detail": 0}
+             "filter_detail": 0, "email_ganda": 0}
 
     filters = params.get("_filters", {})
     pf = _profil(params)
@@ -1459,6 +1477,12 @@ async def _scrape_query(browser, ua, query, area_tag, max_results, params, cb,
                 return
 
             kontak.rapikan_kontak(baris)
+            ganda = _cek_email_ganda(baris, filters)
+            if ganda:
+                db.lewati_catat(kunci, nama_baca, ganda, "email")
+                hasil["email_ganda"] += 1
+                cb(pct, f"⏭ Dilewati: {nama_baca} ({ganda})", len(hasil["baru"]))
+                return
             kurang = kontak.kontak_kurang(baris, mode_kontak)
             if kurang and enrich_aktif and kontak.bisa_dilengkapi_website(baris):
                 # Belum pasti: WA/email mungkin tercantum di website-nya.
@@ -1632,6 +1656,10 @@ async def _async_main(params, cb, should_stop=None):
         "_profil": pf["nama"],
         "_enrich": bool(opsi("enrich_website", True)),
         "_kecualikan": params.get("_kecualikan") or [],
+        # Cabang jaringan yang emailnya sudah dipakai lead lain tidak diambil
+        # lagi — satu email cukup satu penawaran. Bawaan aktif di ruang komponen.
+        "lewati_email_ganda": bool(opsi("lewati_email_ganda",
+                                        pf["nama"] == "komponen")),
     }
     if pf["nama"] == "komponen" and not params.get("mode_kontak"):
         filter_flags["mode_kontak"] = kontak.MODE_WA_ATAU_EMAIL
@@ -1695,7 +1723,8 @@ async def _async_main(params, cb, should_stop=None):
     semua_baru, semua_update, hasil_gemini = [], [], []
     dilihat = set()
     stat = {"dilewati": 0, "filter_awal": 0, "gagal": 0, "duplikat": 0,
-            "dari_kartu": 0, "tutup": 0, "kontak_kurang": 0, "filter_detail": 0}
+            "dari_kartu": 0, "tutup": 0, "kontak_kurang": 0, "filter_detail": 0,
+            "email_ganda": 0}
     n_queries = max(len(search_targets), 1)
     galat_fatal = None
 
@@ -1724,6 +1753,18 @@ async def _async_main(params, cb, should_stop=None):
             await enrich.enrich_banyak(baris_baru, konkuren=enrich_konkuren, cb=cb,
                                        should_stop=should_stop, timeout=enrich_timeout)
             for row in baris_baru:
+                # Email umumnya baru muncul dari website, jadi cek ganda di sini
+                # untuk SEMUA baris baru — termasuk yang sudah lolos lewat WA.
+                # Diproses berurutan & disimpan sebelum baris berikutnya dicek,
+                # jadi dua cabang dalam satu target pun tertangkap.
+                ganda = _cek_email_ganda(row, filter_flags)
+                if ganda:
+                    db.buang_lead(row.get("place_key"), row.get("nama_bisnis"),
+                                  ganda, "email")
+                    row["_email_ganda"] = True
+                    dibuang.append(row)
+                    cb(None, f"⏭ Dilewati: {row.get('nama_bisnis', '?')} ({ganda})", None)
+                    continue
                 if row.get("lolos_filter") == 0:
                     kontak.rapikan_kontak(row)
                     kurang = kontak.kontak_kurang(row, filter_flags.get("mode_kontak"))
@@ -1806,8 +1847,11 @@ async def _async_main(params, cb, should_stop=None):
                     if dibuang:
                         segar = [r for r in segar if r not in dibuang]
                         hasil["baru"] = [r for r in hasil["baru"] if r not in dibuang]
-                        hasil["kontak_kurang"] += len(dibuang)
+                        n_ganda = sum(1 for r in dibuang if r.get("_email_ganda"))
+                        hasil["email_ganda"] += n_ganda
+                        hasil["kontak_kurang"] += len(dibuang) - n_ganda
                     stat["tutup"] += hasil.get("tutup", 0)
+                    stat["email_ganda"] += hasil.get("email_ganda", 0)
                     stat["kontak_kurang"] += hasil.get("kontak_kurang", 0)
                     stat["filter_detail"] += hasil.get("filter_detail", 0)
 
@@ -1830,6 +1874,8 @@ async def _async_main(params, cb, should_stop=None):
                                  f"{hasil['kontak_kurang']} tanpa kontak yang diminta")
                     if hasil.get("filter_detail"):
                         tersaring += f", {hasil['filter_detail']} tidak lolos filter"
+                    if hasil.get("email_ganda"):
+                        tersaring += f", {hasil['email_ganda']} email sudah dipakai lead lain"
                     cb(offset + rng,
                        f"Subtotal '{query}': {len(hasil['baru'])} baru, "
                        f"{hasil['dilewati']} sudah ada di database{tersaring}, "
@@ -1965,6 +2011,8 @@ def _selesaikan_run(run_id, status, stat, filter_flags, hasil_gemini,
     ringkasan["Dilewati — bisnis tutup"] = stat.get("tutup", 0)
     ringkasan["Dilewati — kontak tidak memenuhi"] = stat.get("kontak_kurang", 0)
     ringkasan["Dilewati — rating/ulasan/website/kategori"] = stat.get("filter_detail", 0)
+    if filter_flags.get("lewati_email_ganda"):
+        ringkasan["Dilewati — email sudah dipakai lead lain"] = stat.get("email_ganda", 0)
     ringkasan["Syarat kontak"] = kontak.LABEL_MODE.get(
         filter_flags.get("mode_kontak"), "-")
     if galat_fatal:

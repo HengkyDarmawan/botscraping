@@ -52,6 +52,29 @@ def email_semua(row):
     return list(dict.fromkeys(e.strip() for e in daftar if e and e.strip()))
 
 
+def saring_email(row, dipakai):
+    """
+    Buang email yang sudah dipakai lead lain (`dipakai` = hasil
+    db.email_dipakai: {email huruf kecil: nama lead}).
+
+    Return alasan lead dilewati bila SEMUA emailnya sudah dipakai — cabang lain
+    dari perusahaan yang sama tidak perlu penawaran kedua. Bila masih ada email
+    baru, email ganda dibuang dari row (sisanya dipromosikan) dan return None.
+    Row tanpa email tidak disentuh.
+    """
+    semua = email_semua(row)
+    if not semua or not dipakai:
+        return None
+    sisa = [e for e in semua if e.lower() not in dipakai]
+    if not sisa:
+        nama = list(dict.fromkeys(dipakai[e.lower()] for e in semua))
+        return "email sudah dipakai: " + ", ".join(nama[:2])
+    if len(sisa) < len(semua):
+        row["email"] = sisa[0]
+        row["email_lain"] = "; ".join(sisa[1:])
+    return None
+
+
 def kontak_kurang(row, mode):
     """Alasan lead gugur syarat kontak, atau None bila lolos."""
     wa, em = punya_wa(row), punya_email(row)

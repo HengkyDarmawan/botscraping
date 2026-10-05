@@ -133,6 +133,18 @@ def klasifikasi_segmen(kategori, nama=""):
     return SEGMEN_LAIN
 
 
+# Nama segmen yang bisa dipilih user saat tambah/edit lead manual.
+NAMA_SEGMEN = [s[0] for s in SEGMEN] + [SEGMEN_LAIN[0]]
+
+
+def _segmen_pilihan(nama):
+    """(nama, bobot, kebutuhan) untuk segmen yang dipilih user, atau None."""
+    for seg, bobot, butuh, _ in SEGMEN:
+        if seg == nama:
+            return seg, bobot, butuh
+    return SEGMEN_LAIN if nama == SEGMEN_LAIN[0] else None
+
+
 # ─── Kontak ───────────────────────────────────────────────────────────────────
 # Aturan kontak dipakai kedua ruang — tinggal di scrapers/kontak.py.
 from scrapers.kontak import punya_email, punya_wa, rapikan_kontak  # noqa: E402
@@ -153,7 +165,11 @@ def nilai_lead(row, jumlah_cabang=1):
       SKALA   (maks 25) — jumlah ulasan, rating, cabang, website/toko online
     """
     rapikan_kontak(row)
-    seg, bobot, butuh = klasifikasi_segmen(row.get("kategori"), row.get("nama_bisnis"))
+    # Segmen yang dipilih user (kolom terkunci) menang atas tebakan dari kategori.
+    dikunci = {k.strip() for k in str(row.get("kolom_dikunci") or "").split(",")}
+    pilihan = _segmen_pilihan(row.get("segmen")) if "segmen" in dikunci else None
+    seg, bobot, butuh = pilihan or klasifikasi_segmen(row.get("kategori"),
+                                                      row.get("nama_bisnis"))
     row["segmen"] = seg
 
     alasan = []
