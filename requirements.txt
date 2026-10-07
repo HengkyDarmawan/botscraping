@@ -12,3 +12,10 @@ camoufox
 google-genai
 python-docx
 pywin32; sys_platform == "win32"
+# pembersih kualitas lead (scrapers/kualitas.py) - opsional, ada fallback
+phonenumbers
+email-validator
+dnspython
+rapidfuzz
+tldextract
+ftfy

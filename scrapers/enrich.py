@@ -25,6 +25,11 @@ from datetime import datetime
 import requests
 from bs4 import BeautifulSoup
 
+try:  # opsional — tanpa library ini sintaks email hanya dicek dengan regex
+    from email_validator import validate_email as _validate_email
+except ImportError:
+    _validate_email = None
+
 TIMEOUT = 12
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
@@ -78,6 +83,23 @@ _HOST_MARKETPLACE = (
     "blibli.com", "tokopedia.link", "shopee.com",
 )
 
+# Halaman milik PIHAK KETIGA yang dicantumkan bisnis di kolom "Situs Web" Google
+# Maps: listing OTA, halaman booking Google, pencari lokasi milik jaringan.
+# Bisnis seperti ini belum punya website sendiri — dulu link booking Google
+# (google.com/searchviewer) terbaca "website error" dan ditawari "Website Baru
+# (URGENT)" padahal tidak pernah ada website yang mati.
+_HOST_PINJAMAN = (
+    "trip.com", "bluepillow.com", "booking.com", "agoda.com", "traveloka.com",
+    "tiket.com", "pegipegi.com", "airbnb.com", "airbnb.co.id", "expedia.com",
+    "expedia.co.id", "hotels.com", "reddoorz.com", "oyorooms.com",
+    "gofood.co.id", "gojek.com", "grab.com", "shopeefood.co.id",
+    "business.site", "g.page", "maps.app.goo.gl",
+    # booking lapangan olahraga
+    "ayo.co.id",
+)
+# Subdomain "lokasi.<jaringan>" = halaman cabang di website kantor pusat.
+_RE_LOKASI_JARINGAN = re.compile(r"^(lokasi|location|locations|store|stores|cabang|outlet)\.", re.I)
+
 # Platform yang menandakan website belum digarap serius (domain bukan milik
 # sendiri / builder gratisan) — target upgrade ke website profesional.
 PLATFORM_GRATISAN = {
@@ -102,6 +124,8 @@ _EMAIL_SAMPAH = (
     "namecheap", "sample@", "user@", "nama@", "info@example",
     "noreply", "no-reply", "donotreply", "mailer-daemon", "privacy@",
     "abuse@", "webmaster@", "wordpress@",
+    # alamat contoh bawaan template website builder
+    "mysite.com", "hostinger.com", "yoursite.com", "company.com",
 )
 
 # Awalan kotak surat yang paling mungkin dibaca orang yang memutuskan pembelian.
@@ -178,21 +202,44 @@ def _deteksi_platform(host, html, headers):
     return "custom"
 
 
+_RE_TAG_HTML = re.compile(r"<[^>]*>")
+
+
+def _sintaks_email_valid(e):
+    """Pemeriksaan sintaks resmi (email-validator) bila terpasang; tanpa DNS."""
+    if _validate_email is None:
+        return True
+    try:
+        _validate_email(e, check_deliverability=False)
+        return True
+    except Exception:
+        return False
+
+
 def _bersihkan_email(kandidat):
     hasil = []
     for e in kandidat:
         # Tautan mailto: sering di-encode ("mailto:%20nama@x.com") — tanpa
-        # unquote, "%20" ikut tersimpan sebagai bagian alamat email.
-        e = urllib.parse.unquote(str(e or "")).strip().strip(".,;:<>()[]\"'").lower()
-        m = _RE_EMAIL.search(e)
-        e = m.group() if m else ""
-        if not e or len(e) > 80:
-            continue
-        if any(s in e for s in _EMAIL_SAMPAH):
-            continue
-        if e not in hasil:
-            hasil.append(e)
+        # unquote, "%20" ikut tersimpan sebagai bagian alamat email. Satu sel
+        # bisa memuat tag HTML ("<b>info@x.co.id</b>") atau beberapa alamat
+        # sekaligus ("a@x.biz, b@x.biz") — semua alamatnya diambil.
+        teks = _RE_TAG_HTML.sub(" ", urllib.parse.unquote(str(e or ""))).lower()
+        for e in _RE_EMAIL.findall(teks):
+            e = e.strip(".-_")
+            if not e or len(e) > 80:
+                continue
+            if any(s in e for s in _EMAIL_SAMPAH):
+                continue
+            if not _sintaks_email_valid(e):
+                continue
+            if e not in hasil:
+                hasil.append(e)
     return hasil
+
+
+def bersihkan_email(*sel):
+    """Daftar email bersih dari satu atau beberapa sel teks bebas."""
+    return _bersihkan_email(sel)
 
 
 def urut_email(daftar, website=""):
@@ -480,7 +527,10 @@ async def enrich_banyak(rows, konkuren=5, cb=None, should_stop=None,
     cb(pct, pesan, jumlah) — callback progress yang sama dengan scraper lain.
     should_stop() — dicek tiap lead; bila True, sisanya dilewati.
     """
-    perlu = [r for r in rows if str(r.get(field_url) or "").strip() not in ("", "-", "n/a")]
+    # Halaman pihak ketiga (OTA, booking Google) tidak perlu dibuka: bukan website
+    # bisnisnya, dan kontaknya tidak tercantum di sana.
+    perlu = [r for r in rows if str(r.get(field_url) or "").strip() not in ("", "-", "n/a")
+             and not url_pinjaman(r.get(field_url))]
     for r in rows:
         if r not in perlu:
             r.update(dict(HASIL_KOSONG))
@@ -530,6 +580,29 @@ def url_sosmed(url):
     return _host_cocok(host, _HOST_SOSMED + _HOST_MARKETPLACE)
 
 
+def url_pinjaman(url):
+    """
+    True bila URL ini halaman pihak ketiga (OTA, booking Google, pencari lokasi
+    jaringan), bukan website milik bisnisnya sendiri.
+    """
+    u = str(url or "").strip().lower()
+    if not u or u in ("-", "n/a", "none"):
+        return False
+    if not u.startswith(("http://", "https://")):
+        u = "https://" + u
+    bagian = urllib.parse.urlparse(u)
+    host = bagian.netloc.split(":")[0]
+    if _host_cocok(host, _HOST_PINJAMAN):
+        return True
+    # google.com/searchviewer & google.com/maps — tapi sites.google.com adalah
+    # website (gratisan) milik bisnis, jadi dicek per path.
+    if _host_cocok(host, ("google.com", "google.co.id")) and not host.startswith("sites."):
+        return bagian.path.startswith(("/searchviewer", "/maps", "/travel", "/url"))
+    if host.startswith("maps.google."):
+        return True
+    return bool(_RE_LOKASI_JARINGAN.match(host[4:] if host.startswith("www.") else host))
+
+
 def website_efektif(row):
     """
     True bila bisnis benar-benar punya website sendiri yang hidup.
@@ -542,7 +615,7 @@ def website_efektif(row):
         return False
     if row.get("web_platform") in ("sosmed_saja", "marketplace"):
         return False
-    if url_sosmed(url):
+    if url_sosmed(url) or url_pinjaman(url):
         return False
     if row.get("web_status") in ("mati", "error"):
         return False

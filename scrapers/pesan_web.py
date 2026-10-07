@@ -114,7 +114,9 @@ def isi_pesan(row, atur):
     """
     pic = str(row.get("nama_pic") or "").strip()
     isian = _Isian({
-        "nama": str(row.get("nama_bisnis") or "").strip() or "Bapak/Ibu",
+        # nama_sapaan = nama tanpa keyword promosi / HURUF KAPITAL (kualitas.py).
+        "nama": str(row.get("nama_sapaan") or row.get("nama_bisnis") or "").strip()
+                or "Bapak/Ibu",
         "sapaan": pic or "Bapak/Ibu",
         "jasa": str(row.get("jasa_utama") or "").strip() or "pengembangan bisnis online",
         "alasan": str(row.get("alasan_pitch") or "").strip() or _ALASAN_CADANGAN,

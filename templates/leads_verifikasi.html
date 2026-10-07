@@ -1,0 +1,254 @@
+{% extends "base.html" %}
+{% block title %}Verifikasi Lead{% endblock %}
+{% block page_title %}<i class="bi bi-patch-check-fill text-primary me-2"></i>Verifikasi Lead{% endblock %}
+
+{% block content %}
+<div class="d-flex flex-wrap gap-2 justify-content-between align-items-center mb-3">
+  <div>
+    <strong id="vSisa">…</strong> lead belum diverifikasi
+    {% if args %}<span class="badge bg-secondary-subtle text-secondary-emphasis ms-1" title="Filter dari halaman Database Leads">
+      <i class="bi bi-funnel"></i> filter aktif</span>{% endif %}
+    · <span id="vSesi">0</span> dicek sesi ini
+    <small class="text-muted ms-2" id="vNantiInfo"></small>
+  </div>
+  <div class="d-flex gap-2">
+    <a href="/leads?{{ args|urlencode }}" class="btn btn-outline-secondary btn-sm">
+      <i class="bi bi-arrow-left me-1"></i>Database Leads</a>
+    <a href="/leads?tab=disaring" class="btn btn-outline-secondary btn-sm" title="Lead yang disembunyikan saringan kualitas">
+      <i class="bi bi-funnel me-1"></i>Disaring ({{ stats.disaring }})</a>
+  </div>
+</div>
+
+<div class="row justify-content-center">
+  <div class="col-xl-9">
+    <div class="card shadow-sm" id="vKartu">
+      <div class="card-body text-center text-muted py-5"><div class="spinner-border text-primary"></div></div>
+    </div>
+    <div class="text-center text-muted small mt-2">
+      Pintasan keyboard: <kbd>V</kbd> valid · <kbd>X</kbd> tidak valid · <kbd>N</kbd> nanti ·
+      <kbd>W</kbd> buka website · <kbd>G</kbd> buka Google Maps
+    </div>
+  </div>
+</div>
+
+<div class="toast-container position-fixed bottom-0 start-50 translate-middle-x p-3" id="vToasts"></div>
+{% endblock %}
+
+{% block extra_js %}
+<script src="/static/js/email-popup.js"></script>
+<script>
+const Verifikasi = (() => {
+  const ARGS = {{ args|tojson }};
+  const KUNCI_NANTI = 'verifNanti';
+  const JEDA_HAPUS = 5000;
+  let lead = null, sebelumnya = null, sesi = 0, tertunda = null;
+
+  const el = id => document.getElementById(id);
+  const aman = u => /^https?:\/\//i.test(String(u || '')) ? String(u) : '';
+  const bacaNanti = () => { try { return JSON.parse(sessionStorage.getItem(KUNCI_NANTI) || '[]'); } catch (e) { return []; } };
+  const tulisNanti = v => { try { sessionStorage.setItem(KUNCI_NANTI, JSON.stringify(v)); } catch (e) { /* abaikan */ } };
+
+  async function kirim(keys, hasil) {
+    const r = await fetch('/leads/verifikasi', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ keys, hasil })
+    });
+    return r.json();
+  }
+
+  async function muat() {
+    const qs = new URLSearchParams(ARGS);
+    const nanti = bacaNanti();
+    if (tertunda) nanti.push(tertunda.key);  // sedang menunggu dihapus
+    if (nanti.length) qs.set('kecuali', nanti.join(','));
+    el('vNantiInfo').textContent = bacaNanti().length ? `(${bacaNanti().length} ditunda "nanti")` : '';
+    try {
+      const d = await (await fetch('/leads/verifikasi/berikut?' + qs)).json();
+      el('vSisa').textContent = d.total;
+      if (d.lead) tampil(d.lead); else selesai(d.total);
+    } catch (e) {
+      el('vKartu').innerHTML = '<div class="card-body text-danger">Tidak bisa menghubungi server.</div>';
+    }
+  }
+
+  function baris(ikon, isi) {
+    return isi ? `<div class="mb-1"><i class="bi ${ikon} text-muted me-1"></i>${isi}</div>` : '';
+  }
+
+  function tampil(l) {
+    lead = l;
+    const web = aman(l.website), maps = aman(l.source_url);
+    const salin = t => ` <i class="bi bi-clipboard text-muted salin" role="button" data-teks="${escapeHtml(t)}" title="Salin"></i>`;
+    const kontak = [
+      l.nomor_wa ? `<a href="${escapeHtml(aman(l.wa_pitch) || aman(l.whatsapp_link))}" target="_blank" rel="noopener" class="text-success text-decoration-none">
+                      <i class="bi bi-whatsapp"></i> ${escapeHtml(l.nomor_wa)}</a>${salin(l.nomor_wa)}` : '',
+      l.telepon && (!l.nomor_wa || l.telepon.slice(-6) !== l.nomor_wa.slice(-6))
+        ? `<span class="text-muted"><i class="bi bi-telephone"></i> ${escapeHtml(l.telepon)}</span>` : '',
+      ...(l.email_semua || []).map(e => `<span><i class="bi bi-envelope"></i> ${escapeHtml(e)}${salin(e)}</span>`),
+    ].filter(Boolean).join('<br>');
+    const sosmed = [['instagram', 'bi-instagram'], ['facebook', 'bi-facebook'], ['tiktok', 'bi-tiktok'],
+                    ['tokopedia', 'bi-bag-check'], ['shopee', 'bi-bag-heart'], ['linkedin', 'bi-linkedin'],
+                    ['youtube', 'bi-youtube']]
+      .filter(([k]) => aman(l[k]))
+      .map(([k, i]) => `<a href="${escapeHtml(aman(l[k]))}" target="_blank" rel="noopener" class="me-2" title="${k}"><i class="bi ${i} fs-5"></i></a>`)
+      .join('');
+    const ya = v => v === null || v === undefined || v === '' ? '-' : (Number(v) ? 'ya' : 'tidak');
+    const infoWeb = web
+      ? `<div><a href="${escapeHtml(web)}" target="_blank" rel="noopener" class="text-break">${escapeHtml(web)}</a></div>
+         <small class="text-muted">status: ${escapeHtml(l.web_status || '-')} · platform: ${escapeHtml(l.web_platform || '-')}
+           · HTTPS: ${ya(l.web_https)} · ramah HP: ${ya(l.web_mobile)}
+           ${l.web_tahun_update ? ' · update terakhir: ' + escapeHtml(l.web_tahun_update) : ''}</small>`
+      : '<span class="text-danger">Belum punya website</span>';
+    const ulasan = l.jumlah_ulasan !== null && l.jumlah_ulasan !== undefined ? ` (${escapeHtml(l.jumlah_ulasan)} ulasan)` : '';
+
+    el('vKartu').innerHTML = `
+      <div class="card-header bg-white d-flex justify-content-between align-items-start gap-2">
+        <div>
+          <h5 class="mb-0 fw-bold">${escapeHtml(l.nama_bisnis || '-')}</h5>
+          <small class="text-muted">${escapeHtml(l.kategori || '-')}
+            ${l.rating ? ' · ⭐' + escapeHtml(l.rating) + ulasan : ' · belum ada rating'}</small>
+        </div>
+        <div class="text-end">
+          <span class="tier-badge tier-${escapeHtml(l.tier || 'ARSIP')}">${escapeHtml(l.skor_pembeli || 0)}</span>
+          <small class="d-block text-muted" style="font-size:.7rem">${escapeHtml(l.tier || '-')}</small>
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="row g-3">
+          <div class="col-md-6">
+            ${baris('bi-geo-alt', escapeHtml(l.alamat || ''))}
+            ${baris('bi-buildings', escapeHtml(l.kota || l.area_pencarian || ''))}
+            <div class="mt-2">${kontak || '<span class="text-muted">Tanpa kontak</span>'}</div>
+            <div class="mt-2">${sosmed}</div>
+          </div>
+          <div class="col-md-6">
+            <div class="fw-semibold text-primary">${escapeHtml(l.jasa_utama || '-')}</div>
+            <small class="text-muted d-block mb-2">${escapeHtml(l.alasan_pitch || '')}</small>
+            <div class="small">${infoWeb}</div>
+            <input type="text" class="form-control form-control-sm mt-2" id="vCatatan"
+                   placeholder="Catatan (opsional, disimpan otomatis)" value="${escapeHtml(l.catatan || '')}">
+          </div>
+        </div>
+      </div>
+      <div class="card-footer bg-white d-flex flex-wrap gap-2 justify-content-between">
+        <div class="d-flex gap-2">
+          <a class="btn btn-outline-primary btn-sm ${web ? '' : 'disabled'}" id="vBukaWeb" href="${escapeHtml(web || '#')}" target="_blank" rel="noopener">
+            <i class="bi bi-globe me-1"></i>Buka website <kbd>W</kbd></a>
+          <a class="btn btn-outline-secondary btn-sm ${maps ? '' : 'disabled'}" id="vBukaMaps" href="${escapeHtml(maps || '#')}" target="_blank" rel="noopener">
+            <i class="bi bi-geo-alt me-1"></i>Google Maps <kbd>G</kbd></a>
+        </div>
+        <div class="d-flex gap-2">
+          <button class="btn btn-outline-secondary" onclick="Verifikasi.nanti()"><i class="bi bi-skip-forward me-1"></i>Nanti <kbd>N</kbd></button>
+          <button class="btn btn-outline-danger" onclick="Verifikasi.tidakValid()"><i class="bi bi-x-lg me-1"></i>Tidak Valid <kbd>X</kbd></button>
+          <button class="btn btn-success" onclick="Verifikasi.valid()"><i class="bi bi-check-lg me-1"></i>Valid <kbd>V</kbd></button>
+        </div>
+      </div>`;
+    el('vKartu').querySelectorAll('.salin').forEach(s => s.addEventListener('click', () => EmailPopup.salin(s.dataset.teks, null)
+      .then(() => { s.classList.replace('bi-clipboard', 'bi-check2'); setTimeout(() => s.classList.replace('bi-check2', 'bi-clipboard'), 1200); })));
+    el('vCatatan').addEventListener('change', e => fetch('/leads/update', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ place_key: l.place_key, catatan: e.target.value })
+    }));
+  }
+
+  function selesai(total) {
+    const nanti = bacaNanti();
+    el('vKartu').innerHTML = `<div class="card-body text-center py-5">
+      <i class="bi bi-patch-check text-success" style="font-size:3rem"></i>
+      <h5 class="mt-2">${total ? 'Antrean habis' : 'Semua lead sudah diverifikasi'}</h5>
+      ${nanti.length ? `<p class="text-muted">${nanti.length} lead ditunda dengan "Nanti".</p>
+        <button class="btn btn-primary" onclick="Verifikasi.ulangiNanti()">Ulangi lead yang ditunda</button>`
+        : '<a href="/leads?tab=verif" class="btn btn-outline-primary">Ke Database Leads</a>'}
+    </div>`;
+    lead = null;
+  }
+
+  function toast(teks, onUrung) {
+    const t = document.createElement('div');
+    t.className = 'toast align-items-center text-bg-dark border-0';
+    t.innerHTML = `<div class="d-flex"><div class="toast-body">${teks}
+      ${onUrung ? '<button class="btn btn-sm btn-warning ms-2 urung">Urungkan</button>' : ''}</div>
+      <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button></div>`;
+    el('vToasts').appendChild(t);
+    const bt = new bootstrap.Toast(t, { delay: JEDA_HAPUS });
+    if (onUrung) t.querySelector('.urung').onclick = () => { bt.hide(); onUrung(); };
+    t.addEventListener('hidden.bs.toast', () => t.remove());
+    bt.show();
+  }
+
+  function hitungSesi(n) { sesi += n; el('vSesi').textContent = sesi; }
+
+  async function valid() {
+    if (!lead) return;
+    const l = lead;
+    const d = await kirim([l.place_key], 'valid');
+    if (!d.ok) { alert(d.error || 'Gagal menyimpan.'); return; }
+    hitungSesi(1);
+    sebelumnya = l;
+    toast(`✓ <strong>${escapeHtml(l.nama_bisnis || '')}</strong> valid`, async () => {
+      await kirim([l.place_key], 'batal');
+      hitungSesi(-1);
+      tampil(l);
+    });
+    muat();
+  }
+
+  /** Hapus permanen ditunda 5 detik supaya salah tekan bisa diurungkan. */
+  function jalankanHapus() {
+    if (!tertunda) return;
+    clearTimeout(tertunda.timer);
+    const k = tertunda.key;
+    tertunda = null;
+    return kirim([k], 'tidak_valid');
+  }
+
+  function tidakValid() {
+    if (!lead) return;
+    jalankanHapus();
+    const l = lead;
+    tertunda = { key: l.place_key, timer: setTimeout(jalankanHapus, JEDA_HAPUS) };
+    hitungSesi(1);
+    toast(`✗ <strong>${escapeHtml(l.nama_bisnis || '')}</strong> dihapus & tidak diambil lagi`, () => {
+      if (tertunda && tertunda.key === l.place_key) {
+        clearTimeout(tertunda.timer);
+        tertunda = null;
+        hitungSesi(-1);
+        tampil(l);
+      }
+    });
+    muat();
+  }
+
+  function nanti() {
+    if (!lead) return;
+    const n = bacaNanti();
+    if (!n.includes(lead.place_key)) n.push(lead.place_key);
+    tulisNanti(n);
+    muat();
+  }
+
+  function ulangiNanti() { tulisNanti([]); muat(); }
+
+  document.addEventListener('keydown', e => {
+    if (e.ctrlKey || e.metaKey || e.altKey || ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName)) return;
+    const k = e.key.toLowerCase();
+    if (k === 'v') valid();
+    else if (k === 'x') tidakValid();
+    else if (k === 'n') nanti();
+    else if (k === 'w' && lead && aman(lead.website)) window.open(aman(lead.website), '_blank', 'noopener');
+    else if (k === 'g' && lead && aman(lead.source_url)) window.open(aman(lead.source_url), '_blank', 'noopener');
+  });
+  // Tab ditutup sebelum 5 detik habis: hapus tetap dikirim.
+  window.addEventListener('pagehide', () => {
+    if (!tertunda) return;
+    clearTimeout(tertunda.timer);
+    navigator.sendBeacon('/leads/verifikasi', new Blob(
+      [JSON.stringify({ keys: [tertunda.key], hasil: 'tidak_valid' })], { type: 'application/json' }));
+    tertunda = null;
+  });
+
+  muat();
+  return { valid, tidakValid, nanti, ulangiNanti };
+})();
+</script>
+{% endblock %}

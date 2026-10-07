@@ -32,6 +32,9 @@
     <a href="/leads" class="nav-item {% if request.path == '/leads' %}active{% endif %}">
       <i class="bi bi-person-lines-fill"></i> Database Leads
     </a>
+    <a href="/leads/verifikasi" class="nav-item {% if request.path == '/leads/verifikasi' %}active{% endif %}">
+      <i class="bi bi-patch-check-fill"></i> Verifikasi Lead
+    </a>
     <div class="nav-section">DISTRIBUTOR KOMPONEN</div>
     <a href="/komponen" class="nav-item {% if request.path == '/komponen' %}active{% endif %}">
       <i class="bi bi-cpu-fill"></i> Scraper Komponen
@@ -144,7 +147,7 @@
   // menunjukkan job yang masih jalan di semua halaman, dan memberi notifikasi
   // saat selesai — walau user sedang membuka menu lain.
   (() => {
-    const HALAMAN = { komponen: '/komponen', gmaps: '/gmaps' };
+    const HALAMAN = { komponen: '/komponen', gmaps: '/gmaps', saring: '/leads' };
     const KUNCI = 'jobDipantau';
     const baca = () => { try { return JSON.parse(sessionStorage.getItem(KUNCI) || '{}'); } catch (e) { return {}; } };
     const tulis = v => { try { sessionStorage.setItem(KUNCI, JSON.stringify(v)); } catch (e) { /* abaikan */ } };

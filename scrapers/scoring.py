@@ -39,7 +39,13 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-from scrapers.enrich import PLATFORM_GRATISAN, url_sosmed, website_efektif
+from scrapers.enrich import PLATFORM_GRATISAN, url_pinjaman, url_sosmed, website_efektif
+
+try:  # opsional — tanpa library ini nomor hanya dicek dari awalannya
+    import phonenumbers
+    from phonenumbers import PhoneNumberType as _JenisNomor
+except ImportError:
+    phonenumbers = None
 
 KATALOG_FILE = Path("data") / "jasa.json"
 
@@ -62,8 +68,12 @@ KATEGORI_TINGGI = (
     # teks KATEGORI Google Maps (sudah di-lowercase di sinyal()), bukan kata
     # kunci pencarian — mis. "Lapangan futsal", "Kompleks olahraga",
     # "Agen persewaan mobil" (mengandung "sewa"), "Layanan binatu".
-    "lapangan", "futsal", "badminton", "bulu tangkis", "padel", "tenis",
-    "olahraga", "gelanggang", "sport", "renang", "golf", "biliar", "bilyar",
+    # "lapangan"/"olahraga" polos sengaja TIDAK di sini: lapangan voli/basket
+    # umum dan "Klub Olahraga" bukan bisnis sewa (lihat KATEGORI_LEMAH_WEB).
+    "lapangan futsal", "lapangan bulu tangkis", "lapangan tenis", "lapangan padel",
+    "mini soccer", "sewa lapangan", "kompleks olahraga", "pusat olahraga",
+    "futsal", "badminton", "bulu tangkis", "padel", "tenis",
+    "gelanggang", "sport", "renang", "golf", "biliar", "bilyar",
     "kebugaran", "sasana", "bela diri", "senam", "coworking",
     "ruang kerja bersama",
     "sewa", "kost", "rumah kos", "kos-kosan", "laundry", "binatu",
@@ -73,6 +83,18 @@ KATEGORI_TINGGI = (
 KATEGORI_RENDAH = (
     "warung", "warteg", "kaki lima", "angkringan", "warnet", "konter",
     "pulsa", "gerobak", "kios", "pedagang", "jajanan", "burjo",
+)
+# Sektor yang jarang membeli website sendiri: keputusan ada di kantor pusat
+# (gadai, cabang perusahaan), organisasi nirlaba, atau usaha yang tidak menjual
+# ke publik. Tetap jadi lead, tapi skornya diturunkan supaya tidak menyalip
+# sektor jasa di antrean verifikasi.
+KATEGORI_LEMAH_WEB = (
+    "kantor perusahaan", "gadai", "pegadaian", "gudang", "klub olahraga",
+    # "Layanan Transportasi" sengaja tidak di sini: isinya travel & rental
+    # (shuttle, sewa motor) — justru pembeli website yang baik.
+    "produsen", "asosiasi", "organisasi",
+    "yayasan", "perkumpulan", "lapangan voli", "lapangan basket",
+    "lapangan sepak bola", "lapangan atletik",
 )
 # Kategori yang penjualannya cocok dipindah ke online.
 KATEGORI_RETAIL = (
@@ -130,7 +152,19 @@ def nomor_wa_valid(phone_raw):
     saja — tidak memastikan nomornya benar-benar aktif di WhatsApp.
     """
     d = normalisasi_nomor(phone_raw)
-    return d.startswith("628") and 10 <= len(d) <= 14
+    if not (d.startswith("628") and 10 <= len(d) <= 14):
+        return False
+    # Awalan 08 belum tentu seluler: 0800 (bebas pulsa), 0804 (premium), 0807
+    # (UAN) ikut lolos cek awalan dan dulu dijadikan tautan wa.me. phonenumbers
+    # memakai tabel penomoran resmi Indonesia untuk memastikannya.
+    if phonenumbers is not None:
+        try:
+            nomor = phonenumbers.parse("+" + d)
+            return phonenumbers.is_valid_number(nomor) and phonenumbers.number_type(nomor) in (
+                _JenisNomor.MOBILE, _JenisNomor.FIXED_LINE_OR_MOBILE)
+        except Exception:
+            return False
+    return True
 
 
 def link_wa(phone_raw, pesan=""):
@@ -207,6 +241,10 @@ def sinyal(row):
     tahun_ini = datetime.now().year
     tahun_web = row.get("web_tahun_update")
     url = str(row.get("website") or "").strip()
+    # Listing OTA / link booking Google / pencari lokasi jaringan bukan website
+    # bisnisnya: dinilai sama dengan belum punya website (bukan "website mati").
+    if url_pinjaman(url):
+        url = ""
     platform = str(row.get("web_platform") or "")
 
     hasil = {
@@ -542,6 +580,9 @@ def skor_pembeli(row, jumlah_cabang=1):
     if _cocok(s["kategori"], KATEGORI_TINGGI):
         mampu += 10
         rincian["kategori bernilai tinggi"] = 10
+    elif _cocok(s["kategori"], KATEGORI_LEMAH_WEB):
+        mampu -= 10
+        rincian["sektor jarang membeli website"] = -10
     elif _cocok(s["kategori"], KATEGORI_RENDAH):
         mampu -= 5
         rincian["kategori margin tipis"] = -5
@@ -627,8 +668,10 @@ def nilai_lead(row, jumlah_cabang=1):
     Row diubah di tempat dan juga dikembalikan, supaya enak dipakai dalam
     list comprehension maupun loop biasa.
     """
-    # Impor malas: scrapers.kontak mengimpor modul ini untuk helper nomor.
-    from scrapers import kontak
+    # Impor malas: scrapers.kontak & scrapers.kualitas mengimpor modul ini.
+    from scrapers import kontak, kualitas
+    # Rapikan data kotor (email, alamat, kota, nama sapaan) sebelum dinilai.
+    kualitas.perbaiki(row)
     kontak.rapikan_kontak(row)
     row.update(rekomendasi_jasa(row))
     hasil = skor_pembeli(row, jumlah_cabang)

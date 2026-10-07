@@ -153,6 +153,27 @@
     <span><strong>{{ total }}</strong> lead cocok dengan filter · <span id="jmlPilih">0</span> dipilih
       <small class="text-muted ms-2">Halaman {{ halaman }} dari {{ total_halaman }}</small></span>
     <div class="d-flex flex-wrap gap-2">
+      <a href="/leads/verifikasi?{{ args|urlencode }}" class="btn btn-primary btn-sm"
+         title="Cek lead satu per satu: Valid / Tidak Valid / Nanti">
+        <i class="bi bi-patch-check me-1"></i>Mulai Verifikasi ({{ jumlah_tab.verif or 0 }})
+      </a>
+      {% if tab_aktif == 'disaring' %}
+      <button class="btn btn-outline-success btn-sm" id="btnKembalikanPilih" onclick="Kembalikan.terpilih()" disabled
+              title="Tampilkan lagi lead yang dicentang (dianggap sudah diverifikasi)">
+        <i class="bi bi-arrow-counterclockwise me-1"></i>Kembalikan terpilih
+      </button>
+      {% endif %}
+      <div class="dropdown">
+        <button class="btn btn-outline-secondary btn-sm dropdown-toggle" data-bs-toggle="dropdown">
+          <i class="bi bi-stars me-1"></i>Bersihkan data
+        </button>
+        <ul class="dropdown-menu dropdown-menu-end small">
+          <li><button class="dropdown-item" onclick="Bersihkan.jalan('/leads/cek-email')">
+            <i class="bi bi-envelope-check me-1"></i>Cek email (MX) — buang email ke domain mati</button></li>
+          <li><button class="dropdown-item" onclick="Bersihkan.jalan('/leads/saring-ulang')">
+            <i class="bi bi-funnel me-1"></i>Saring ulang semua lead</button></li>
+        </ul>
+      </div>
       <button class="btn btn-outline-warning btn-sm" data-pin-massal="1" disabled title="PIN baris yang dicentang sebagai lead berpotensi">
         <i class="bi bi-star-fill me-1"></i>Pin terpilih
       </button>
@@ -201,6 +222,12 @@
             </small>
             {% if l.sudah_diklaim == 0 %}
             <span class="badge bg-warning text-dark" style="font-size:.6rem">belum diklaim</span>
+            {% endif %}
+            {% if l.verifikasi == 'valid' %}
+            <span class="badge bg-success-subtle text-success-emphasis" style="font-size:.6rem">
+              <i class="bi bi-patch-check"></i> terverifikasi</span>
+            {% elif l.verifikasi == 'disaring' %}
+            <small class="d-block text-danger" style="font-size:.7rem"><i class="bi bi-funnel"></i> {{ l.alasan_saring }}</small>
             {% endif %}
           </td>
           <td style="max-width:320px">
@@ -279,6 +306,10 @@
             {% endif %}
             <button class="btn btn-outline-primary btn-sm mb-1"
                     onclick="lihatDetail(this.closest('tr').dataset.key)" title="Detail"><i class="bi bi-eye"></i></button>
+            {% if l.verifikasi == 'disaring' %}
+            <button class="btn btn-outline-success btn-sm mb-1 btn-kembalikan" title="Tampilkan lagi lead ini">
+              <i class="bi bi-arrow-counterclockwise"></i></button>
+            {% endif %}
             <button class="btn btn-outline-danger btn-sm mb-1 btn-hapus" title="Hapus lead ini">
               <i class="bi bi-trash"></i></button>
           </td>
@@ -444,7 +475,9 @@ const LABEL = {
   rating: 'Rating', jumlah_ulasan: 'Jumlah ulasan', rentang_harga: 'Rentang harga',
   first_seen_at: 'Pertama ditemukan', last_scraped_at: 'Terakhir di-scrape',
   last_checked_at: 'Terakhir dicek', times_seen: 'Kali ditemukan',
-  area_pencarian: 'Area', instagram: 'Instagram', facebook: 'Facebook'
+  area_pencarian: 'Area', kota: 'Kota', instagram: 'Instagram', facebook: 'Facebook',
+  nama_sapaan: 'Nama di pesan', email_valid: 'Email terverifikasi (MX)',
+  verifikasi: 'Verifikasi', alasan_saring: 'Alasan disaring', tanggal_verifikasi: 'Tanggal verifikasi'
 };
 
 function barisDari(el) { return el.closest('tr[data-key]'); }
@@ -458,6 +491,8 @@ function hitungPilih() {
   bh.disabled = !n;
   bh.innerHTML = `<i class="bi bi-trash me-1"></i>Hapus terpilih${n ? ' (' + n + ')' : ''}`;
   document.querySelectorAll('[data-pin-massal]').forEach(b => b.disabled = !n);
+  const bk = document.getElementById('btnKembalikanPilih');
+  if (bk) bk.disabled = !n;
 }
 document.getElementById('pilihSemua').addEventListener('change', e => {
   document.querySelectorAll('.pilih-baris').forEach(c => c.checked = e.target.checked);
@@ -541,6 +576,48 @@ const Hapus = (() => {
 })();
 
 
+// ─── Tab Disaring: kembalikan lead yang salah saring ──────────────────────────
+const Kembalikan = (() => {
+  async function kirim(keys) {
+    const d = await (await fetch('/leads/verifikasi', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ keys, hasil: 'kembalikan' })
+    })).json();
+    if (!d.ok) { alert(d.error || 'Gagal mengembalikan.'); return; }
+    keys.forEach(k => document.querySelector(`tr[data-key="${CSS.escape(k)}"]`)?.remove());
+    hitungPilih();
+    if (!document.querySelector('tr[data-key]')) window.location.reload();
+  }
+  document.querySelectorAll('.btn-kembalikan').forEach(b =>
+    b.addEventListener('click', () => kirim([barisDari(b).dataset.key])));
+  return { terpilih: () => { const k = kunciTerpilih(); if (k.length) kirim(k); } };
+})();
+
+// ─── Bersihkan data: cek email (MX) / saring ulang — job latar ───────────────
+const Bersihkan = (() => {
+  async function jalan(url) {
+    const r = await fetch(url, { method: 'POST' });
+    const d = await r.json();
+    if (!d.ok) { alert(d.error || 'Gagal memulai.'); return; }
+    const kotak = document.createElement('div');
+    kotak.className = 'alert alert-info py-2 small';
+    kotak.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span><span class="isi">Memulai...</span>';
+    document.querySelector('.tab-leads').before(kotak);
+    const isi = kotak.querySelector('.isi');
+    const es = new EventSource('/stream/' + d.job_id);
+    es.onmessage = e => {
+      const m = JSON.parse(e.data);
+      if (m.logs && m.logs.length) isi.textContent = m.logs[m.logs.length - 1];
+      if (['done', 'error', 'dibatalkan'].includes(m.status)) {
+        es.close();
+        kotak.className = 'alert ' + (m.status === 'done' ? 'alert-success' : 'alert-danger') + ' py-2 small';
+        kotak.innerHTML = `${escapeHtml(isi.textContent)} — <a href="">muat ulang halaman</a>`;
+      }
+    };
+  }
+  return { jalan };
+})();
+
 function simpanLead(placeKey, el, field) {
   const body = { place_key: placeKey };
   body[field] = el.value;
@@ -616,7 +693,7 @@ function lihatDetail(placeKey) {
       Object.keys(LABEL).forEach(k => {
         let v = d[k];
         if (v === null || v === undefined || v === '') return;
-        if (k === 'sudah_diklaim' || k === 'web_https' || k === 'web_mobile' || k === 'web_ada_pixel') {
+        if (k === 'sudah_diklaim' || k === 'web_https' || k === 'web_mobile' || k === 'web_ada_pixel' || k === 'email_valid') {
           v = v ? 'Ya' : 'Tidak';
         }
         html += `<tr><th style="width:38%">${LABEL[k]}</th><td>${escapeHtml(String(v))}</td></tr>`;

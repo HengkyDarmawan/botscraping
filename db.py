@@ -58,7 +58,10 @@ KOLOM_MILIK_USER = {"status_leads", "catatan", "tanggal_follow_up", "first_seen_
                     "nama_pic", "proposal_nomor", "proposal_tanggal",
                     "proposal_file", "tanggal_dihubungi", "kanal_kontak",
                     # tanda "lead berpotensi" yang dipasang user (kedua ruang)
-                    "dipin"}
+                    "dipin",
+                    # hasil verifikasi manual & saringan kualitas — diputuskan
+                    # di luar scraping, jadi scraping ulang tidak menimpanya
+                    "verifikasi", "alasan_saring", "tanggal_verifikasi"}
 _KOLOM_MILIK_USER = KOLOM_MILIK_USER
 
 SCHEMA_LEADS = """
@@ -324,6 +327,16 @@ KOLOM_KONTAK = {
     "kanal_kontak":     "TEXT",
     # 1 = di-PIN user sebagai lead berpotensi: punya tab sendiri & selalu di atas.
     "dipin":            "INTEGER DEFAULT 0",
+    # '' = belum diverifikasi, 'valid' = dicek user (atau dikembalikan dari
+    # tab Disaring), 'disaring' = disembunyikan saringan kualitas
+    # (scrapers/kualitas.py) dengan alasan di `alasan_saring`.
+    "verifikasi":         "TEXT",
+    "alasan_saring":      "TEXT",
+    "tanggal_verifikasi": "TEXT",
+    # Nama rapi untuk template pesan (tanpa keyword promosi / HURUF KAPITAL).
+    "nama_sapaan":        "TEXT",
+    # 1 = domain email terbukti bisa menerima email (cek MX), 0 = tidak.
+    "email_valid":        "INTEGER",
 }
 
 # Kolom yang hanya ada di ruang komponen (proposal ISB).
@@ -676,6 +689,9 @@ def upsert_business(row, sentuh_scrape=True):
         # saat run berikutnya karena tampilan halamannya berbeda.
         data = {k: v for k, v in data.items()
                 if v is not None or ada.get(k) is None}
+        if "email" in data and (data["email"] or "") != (ada.get("email") or "") \
+                and "email_valid" in kolom_valid:
+            data["email_valid"] = None
         data.pop("place_key", None)
         data["last_checked_at"] = now
         if sentuh_scrape:
@@ -778,13 +794,17 @@ def perubahan_terbaru(place_key=None, batas=100):
 # Berapa hari bisnis yang dilewati tidak dibuka lagi. None = selamanya
 # ("manual": user menghapus lead salah scrape dan memilih jangan diambil lagi).
 # "email": semua emailnya sudah dipakai lead lain (cabang jaringan yang sama).
-HARI_LEWATI = {"tutup": 180, "kontak": 30, "manual": None, "email": 180}
+HARI_LEWATI = {"tutup": 180, "kontak": 30, "manual": None, "email": 180,
+               # bukan calon pembeli menurut scrapers/kualitas.py
+               "kualitas": 180}
 
-# Lead "aktif" = lolos syarat saat scraping dan tidak tutup. Daftar, hitungan,
-# dan export hanya membaca baris ini.
-SQL_AKTIF = ("COALESCE(lolos_filter, 1) = 1 AND "
-             "LOWER(COALESCE(status_buka, '')) NOT LIKE '%tutup%' AND "
-             "LOWER(COALESCE(status_buka, '')) NOT LIKE '%closed%'")
+# Lead "aktif" = lolos syarat saat scraping, tidak tutup, dan tidak disaring
+# saringan kualitas. Daftar, hitungan, dan export hanya membaca baris ini.
+SQL_AKTIF_DASAR = ("COALESCE(lolos_filter, 1) = 1 AND "
+                   "LOWER(COALESCE(status_buka, '')) NOT LIKE '%tutup%' AND "
+                   "LOWER(COALESCE(status_buka, '')) NOT LIKE '%closed%'")
+_SQL_DISARING = "COALESCE(verifikasi, '') = 'disaring'"
+SQL_AKTIF = f"{SQL_AKTIF_DASAR} AND NOT {_SQL_DISARING}"
 
 
 # ─── Tab & filter bersama halaman Leads (kedua ruang) ─────────────────────────
@@ -806,6 +826,8 @@ _SQL_SELESAI = f"{_STATUS} IN ({_DAFTAR_SELESAI})"
 TAB_LEADS = [("semua", "Semua"), ("dipin", "Dipin"), ("belum", "Belum Dikontak"),
              ("sudah", "Sudah Dikontak"), ("fu", "Follow-up Hari Ini"),
              ("selesai", "Selesai")]
+# Klien Website: + antrean verifikasi manual & lead yang disaring kualitas.
+TAB_LEADS_WEB = TAB_LEADS + [("verif", "Belum Diverifikasi"), ("disaring", "Disaring")]
 
 
 def _sql_tab(tab):
@@ -818,19 +840,31 @@ def _sql_tab(tab):
         "fu": (f"tanggal_follow_up IS NOT NULL AND tanggal_follow_up != '' AND "
                f"tanggal_follow_up <= '{hari_ini}' AND NOT {_SQL_SELESAI}"),
         "selesai": _SQL_SELESAI,
+        "verif": "COALESCE(verifikasi, '') = ''",
+        "disaring": _SQL_DISARING,
     }.get(tab)
 
 
-def hitung_tab(klausa, args):
+def hitung_tab(klausa, args, tabs=TAB_LEADS):
     """
     Jumlah baris tiap tab untuk WHERE `klausa` (filter lain yang aktif, TANPA
     tab) — angka badge sama dengan jumlah baris saat tab itu diklik.
+
+    Bila `tabs` memuat "disaring", `klausa` harus MENYERTAKAN baris disaring
+    (lihat hitung_tab_leads); tab lain lalu mengecualikannya sendiri.
     """
-    kolom = ", ".join(f"COALESCE(SUM(CASE WHEN {_sql_tab(k)} THEN 1 ELSE 0 END), 0) AS {k}"
-                      for k, _ in TAB_LEADS if k != "semua")
+    ada_disaring = any(k == "disaring" for k, _ in tabs)
+
+    def kondisi(k):
+        if k == "disaring":
+            return _SQL_DISARING
+        isi = _sql_tab(k) or "1 = 1"
+        return f"({isi}) AND NOT {_SQL_DISARING}" if ada_disaring else isi
+
+    kolom = ", ".join(f"COALESCE(SUM(CASE WHEN {kondisi(k)} THEN 1 ELSE 0 END), 0) AS {k}"
+                      for k, _ in tabs)
     with _lock:
-        r = get_conn().execute(
-            f"SELECT COUNT(*) AS semua, {kolom} FROM businesses{klausa}", args).fetchone()
+        r = get_conn().execute(f"SELECT {kolom} FROM businesses{klausa}", args).fetchone()
     return dict(r)
 
 
@@ -997,7 +1031,7 @@ def buang_lead(place_key, nama, alasan, jenis="kontak", mode=""):
     lewati_catat(place_key, nama, alasan, jenis, mode)
 
 
-def _hapus_keys(conn, keys, jangan_ambil_lagi):
+def _hapus_keys(conn, keys, jangan_ambil_lagi, alasan="dihapus manual"):
     n = 0
     for i in range(0, len(keys), 500):
         potong = keys[i:i + 500]
@@ -1006,9 +1040,9 @@ def _hapus_keys(conn, keys, jangan_ambil_lagi):
             sekarang = _now()
             conn.executemany(
                 "INSERT OR REPLACE INTO dilewati (place_key, nama, alasan, jenis, mode, "
-                "dicek_pada) SELECT place_key, nama_bisnis, 'dihapus manual', 'manual', "
+                "dicek_pada) SELECT place_key, nama_bisnis, ?, 'manual', "
                 "'', ? FROM businesses WHERE place_key = ?",
-                [(sekarang, k) for k in potong])
+                [(alasan, sekarang, k) for k in potong])
         n += conn.execute(f"DELETE FROM businesses WHERE place_key IN ({tanda})",
                           potong).rowcount
         conn.execute(f"DELETE FROM run_leads WHERE place_key IN ({tanda})", potong)
@@ -1016,7 +1050,7 @@ def _hapus_keys(conn, keys, jangan_ambil_lagi):
     return n
 
 
-def hapus_leads(keys, jangan_ambil_lagi=False):
+def hapus_leads(keys, jangan_ambil_lagi=False, alasan="dihapus manual"):
     """
     Hapus lead tertentu beserta jejaknya. Return jumlah yang terhapus.
 
@@ -1028,7 +1062,7 @@ def hapus_leads(keys, jangan_ambil_lagi=False):
         return 0
     with _lock:
         conn = get_conn()
-        n = _hapus_keys(conn, keys, jangan_ambil_lagi)
+        n = _hapus_keys(conn, keys, jangan_ambil_lagi, alasan)
         conn.commit()
     return n
 
@@ -1046,6 +1080,235 @@ def set_pin(keys, nilai=True):
                 f"({','.join('?' * len(potong))})", [1 if nilai else 0] + potong).rowcount
         conn.commit()
     return n
+
+
+def set_verifikasi(keys, nilai="valid", alasan=""):
+    """
+    Tandai hasil verifikasi: 'valid' (dicek user / dikembalikan dari tab
+    Disaring), 'disaring', atau '' (belum). Return jumlah baris.
+    """
+    keys = [k for k in dict.fromkeys(keys or []) if k]
+    n = 0
+    sekarang = _now() if nilai == "valid" else None
+    with _lock:
+        conn = get_conn()
+        for i in range(0, len(keys), 500):
+            potong = keys[i:i + 500]
+            n += conn.execute(
+                f"UPDATE businesses SET verifikasi = ?, alasan_saring = ?, "
+                f"tanggal_verifikasi = ? WHERE place_key IN ({','.join('?' * len(potong))})",
+                [nilai or "", alasan or "", sekarang] + potong).rowcount
+        conn.commit()
+    return n
+
+
+def wa_dipakai(whatsapp_link, kecuali=None):
+    """Nama lead LAIN yang memakai nomor WhatsApp sama, atau None."""
+    m = re.search(r"wa\.me/(\d+)", str(whatsapp_link or ""))
+    if not m:
+        return None
+    with _lock:
+        r = get_conn().execute(
+            "SELECT nama_bisnis FROM businesses WHERE place_key != ? AND "
+            "whatsapp_link LIKE ? LIMIT 1",
+            (kecuali or "", f"%wa.me/{m.group(1)}%")).fetchone()
+    return (r["nama_bisnis"] or "lead lain") if r else None
+
+
+# Kolom yang boleh diubah saringan kualitas (perbaikan data + skor ulang).
+_KOLOM_SARING = ("alamat", "email", "email_lain", "whatsapp_link", "whatsapp_lain",
+                 "website_utama", "kota", "nama_sapaan", "instagram", "facebook",
+                 "tiktok", "tokopedia", "shopee", "marketplace_lain", "linkedin",
+                 "youtube", "skor_pembeli", "tier", "jasa_utama", "jasa_pendukung",
+                 "alasan_pitch", "jalur", "skor_popularitas", "verifikasi",
+                 "alasan_saring")
+
+
+def _sudah_disentuh(r):
+    """Lead yang sudah dikerjakan user tidak pernah disembunyikan otomatis."""
+    return ((r.get("status_leads") or "Belum Dihubungi") != "Belum Dihubungi"
+            or (r.get("catatan") or "").strip()
+            or (r.get("tanggal_dihubungi") or "").strip()
+            or int(r.get("dipin") or 0) == 1
+            or r.get("verifikasi") == "valid")
+
+
+def saring_kualitas(cb=None):
+    """
+    Bersihkan seluruh lead ruang Klien Website dengan scrapers/kualitas.py:
+
+      1. perbaiki data kotor + hitung ulang jasa & skor (scoring.nilai_lead),
+      2. sembunyikan lead sampah (verifikasi = 'disaring' + alasan),
+      3. jaringan/cabang: satu wakil dipertahankan, sisanya disaring.
+
+    Lead yang sudah disentuh user (status, catatan, PIN, verifikasi valid)
+    tetap diperbaiki & dinilai ulang, tapi tidak pernah disembunyikan. Aman
+    diulang: lead 'disaring' dinilai ulang dari nol setiap kali dijalankan.
+    Return Counter {alasan: jumlah}.
+    """
+    from collections import Counter
+
+    from scrapers import kualitas, scoring
+
+    with _lock:
+        conn = get_conn()
+        rows = [dict(r) for r in conn.execute("SELECT * FROM businesses")]
+    if cb:
+        cb(f"Memeriksa {len(rows)} lead...")
+
+    # Sama dengan hitung_cabang(), tapi dihitung sekali untuk semua baris.
+    lokasi = {}
+    for r in rows:
+        nama = str(r.get("nama_bisnis") or "").strip()
+        if len(nama) >= 4:
+            lokasi.setdefault(nama, set()).add(r.get("alamat") or r["place_key"])
+
+    asli = {}
+    for r in rows:
+        asli[r["place_key"]] = {k: r.get(k) for k in _KOLOM_SARING}
+        nama = str(r.get("nama_bisnis") or "").strip()
+        try:
+            scoring.nilai_lead(r, jumlah_cabang=max(len(lokasi.get(nama, ())), 1))
+        except Exception:
+            pass
+        if r.get("verifikasi") == "disaring":
+            r["verifikasi"], r["alasan_saring"] = "", ""
+
+    alasan = {}
+    for r in rows:
+        if not _sudah_disentuh(r):
+            a = kualitas.alasan_sampah(r)
+            if a:
+                alasan[r["place_key"]] = a
+
+    # Jaringan: wakil = lead yang sudah disentuh, lalu yang punya email, lalu
+    # ulasan & skor terbesar. Hanya anggota yang lolos aturan lain yang bersaing.
+    per_kelompok = {}
+    for key, akar in kualitas.kelompok_jaringan(rows).items():
+        per_kelompok.setdefault(akar, []).append(key)
+    per_key = {r["place_key"]: r for r in rows}
+    for anggota in per_kelompok.values():
+        calon = [per_key[k] for k in anggota if k not in alasan]
+        if len(calon) < 2:
+            continue
+        calon.sort(key=lambda r: (not _sudah_disentuh(r), not r.get("email"),
+                                  -int(r.get("jumlah_ulasan") or 0),
+                                  -int(r.get("skor_pembeli") or 0)))
+        wakil = calon[0]
+        for r in calon[1:]:
+            if not _sudah_disentuh(r):
+                alasan[r["place_key"]] = (f"cabang lain dari jaringan "
+                                          f"'{(wakil.get('nama_bisnis') or '')[:40]}' "
+                                          f"({len(anggota)} lokasi)")
+
+    hitung = Counter()
+    pembaruan, perubahan_email = [], []
+    sekarang = _now()
+    for r in rows:
+        key = r["place_key"]
+        if key in alasan:
+            r["verifikasi"], r["alasan_saring"] = "disaring", alasan[key]
+            hitung[alasan[key].split(" '")[0].split(" (")[0]] += 1
+        lama = asli[key]
+        beda = {k: r.get(k) for k in _KOLOM_SARING if (r.get(k) or "") != (lama.get(k) or "")}
+        if beda:
+            pembaruan.append((key, beda))
+        for f in ("email", "email_lain"):
+            if f in beda:
+                perubahan_email.append((key, r.get("nama_bisnis"), f, lama.get(f) or "",
+                                        r.get(f) or "", sekarang))
+
+    with _lock:
+        conn = get_conn()
+        for key, beda in pembaruan:
+            kolom = list(beda)
+            conn.execute(f"UPDATE businesses SET {', '.join(f'{k} = ?' for k in kolom)} "
+                         f"WHERE place_key = ?", [beda[k] for k in kolom] + [key])
+        conn.executemany(
+            "INSERT INTO business_changes (place_key, nama_bisnis, field, nilai_lama, "
+            "nilai_baru, changed_at) VALUES (?, ?, ?, ?, ?, ?)", perubahan_email)
+        conn.commit()
+    hitung["diperbarui"] = len(pembaruan)
+    if cb:
+        cb(f"Selesai: {len(alasan)} lead disaring, {len(pembaruan)} baris diperbarui.")
+    return hitung
+
+
+def pastikan_saring_terbaru(sebelum=None):
+    """
+    Jalankan saring_kualitas() bila aturan scrapers/kualitas.py berubah sejak
+    terakhir dijalankan (VERSI disimpan di tabel pengaturan). `sebelum` dipanggil
+    tepat sebelum menyaring — dipakai app.py untuk membuat cadangan dulu.
+    Return Counter hasil saring, atau None bila sudah terbaru.
+    """
+    from scrapers import kualitas
+
+    with _lock:
+        r = get_conn().execute(
+            "SELECT nilai FROM pengaturan WHERE kunci = 'versi_saring'").fetchone()
+    if r and str(r["nilai"]) == str(kualitas.VERSI):
+        return None
+    if sebelum:
+        sebelum()
+    hasil = saring_kualitas()
+    with _lock:
+        conn = get_conn()
+        conn.execute("INSERT OR REPLACE INTO pengaturan (kunci, nilai) "
+                     "VALUES ('versi_saring', ?)", (str(kualitas.VERSI),))
+        conn.commit()
+    return hasil
+
+
+def domain_email_belum_dicek():
+    """Domain email lead aktif yang belum pernah dicek MX."""
+    with _lock:
+        rows = get_conn().execute(
+            f"SELECT email, email_lain FROM businesses WHERE {SQL_AKTIF} "
+            f"AND email_valid IS NULL AND (COALESCE(email, '') != '' "
+            f"OR COALESCE(email_lain, '') != '')").fetchall()
+    domain = set()
+    for r in rows:
+        for e in _email_baris(r["email"], r["email_lain"]):
+            domain.add(e.rpartition("@")[2])
+    return sorted(d for d in domain if d)
+
+
+def terapkan_cek_email(hasil_domain):
+    """
+    Terapkan hasil cek MX {domain: True/False/None}: email ke domain yang
+    terbukti mati dibuang (dicatat di riwayat perubahan), email lain yang hidup
+    naik jadi email utama, dan `email_valid` diisi 1 / 0. Domain yang tidak bisa
+    dipastikan (None) dibiarkan. Return (baris diperbarui, email dibuang).
+    """
+    sekarang = _now()
+    n_baris = n_buang = 0
+    with _lock:
+        conn = get_conn()
+        rows = conn.execute(
+            "SELECT place_key, nama_bisnis, email, email_lain FROM businesses "
+            "WHERE email_valid IS NULL AND (COALESCE(email, '') != '' "
+            "OR COALESCE(email_lain, '') != '')").fetchall()
+        for r in rows:
+            semua = _email_baris(r["email"], r["email_lain"])
+            status = [hasil_domain.get(e.rpartition("@")[2]) for e in semua]
+            if all(s is None for s in status):
+                continue
+            hidup = [e for e, s in zip(semua, status) if s is not False]
+            buang = [e for e, s in zip(semua, status) if s is False]
+            email = hidup[0] if hidup else ""
+            lain = "; ".join(hidup[1:6])
+            valid = 1 if any(s is True for s in status) else 0
+            conn.execute("UPDATE businesses SET email = ?, email_lain = ?, email_valid = ? "
+                         "WHERE place_key = ?", (email, lain, valid, r["place_key"]))
+            if buang:
+                conn.execute(
+                    "INSERT INTO business_changes (place_key, nama_bisnis, field, nilai_lama, "
+                    "nilai_baru, changed_at) VALUES (?, ?, 'email (domain mati)', ?, ?, ?)",
+                    (r["place_key"], r["nama_bisnis"], "; ".join(buang), email, sekarang))
+            n_baris += 1
+            n_buang += len(buang)
+        conn.commit()
+    return n_baris, n_buang
 
 
 def semua_keys():
@@ -1323,9 +1586,27 @@ def run_terputus_terakhir():
 def _where_leads(tier=None, jasa_utama=None, area=None, status_leads=None,
                  punya_wa=None, skor_min=None, skor_max=None, q=None,
                  run=None, kontak=None, follow_up=False, tanpa_opt_out=False,
-                 website=None, kota=None, kanal=None, tab=None, **_abaikan):
-    """WHERE halaman Database Leads. Return (klausa, args)."""
-    where, args = [SQL_AKTIF], []
+                 website=None, kota=None, kanal=None, tab=None, verif=None,
+                 kecuali=None, sertakan_disaring=False, **_abaikan):
+    """
+    WHERE halaman Database Leads. Return (klausa, args).
+
+    Lead yang disaring kualitas hanya muncul di tab "disaring" (atau bila
+    `sertakan_disaring`, dipakai hitungan badge tab).
+    """
+    where, args = [SQL_AKTIF_DASAR], []
+    if tab == "disaring":
+        where.append(_SQL_DISARING)
+    elif not sertakan_disaring:
+        where.append(f"NOT {_SQL_DISARING}")
+    if verif == "belum":
+        where.append("COALESCE(verifikasi, '') = ''")
+    elif verif == "valid":
+        where.append("verifikasi = 'valid'")
+    kecuali = [k for k in (kecuali or []) if k][:500]
+    if kecuali:
+        where.append(f"place_key NOT IN ({','.join('?' * len(kecuali))})")
+        args += kecuali
     if run:
         where.append("place_key IN (SELECT place_key FROM run_leads WHERE run_id = ?)")
         args.append(run)
@@ -1357,7 +1638,7 @@ def _where_leads(tier=None, jasa_utama=None, area=None, status_leads=None,
     if kanal:
         where.append("COALESCE(kanal_kontak, '') LIKE ?")
         args.append(f"%{kanal}%")
-    if tab and _sql_tab(tab):
+    if tab and tab != "disaring" and _sql_tab(tab):
         where.append(_sql_tab(tab))
     if follow_up:
         where.append("tanggal_follow_up IS NOT NULL AND tanggal_follow_up <= ? AND "
@@ -1394,7 +1675,7 @@ URUTAN_LEADS = {
 def hitung_tab_leads(**filters):
     """Angka badge nav tab Database Leads untuk filter aktif (tab diabaikan)."""
     filters.pop("tab", None)
-    return hitung_tab(*_where_leads(**filters))
+    return hitung_tab(*_where_leads(**filters, sertakan_disaring=True), tabs=TAB_LEADS_WEB)
 
 
 def query_leads(urut="skor_pembeli", limit=50, offset=0, **filters):
@@ -1514,6 +1795,11 @@ def stats():
                 "SELECT COUNT(*) AS n FROM business_changes WHERE changed_at >= ?",
                 (batas_30,),
             ),
+            "belum_verifikasi": satu(
+                f"SELECT COUNT(*) AS n FROM {B} WHERE COALESCE(verifikasi, '') = ''"),
+            "disaring": satu(
+                f"SELECT COUNT(*) AS n FROM businesses WHERE {SQL_AKTIF_DASAR} "
+                f"AND {_SQL_DISARING}"),
         }
 
 

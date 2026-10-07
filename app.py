@@ -55,6 +55,7 @@ _SUMBER_DIPANTAU = (
     "scrapers/mp_cari.py", "scrapers/gmaps.py", "scrapers/scoring.py",
     "scrapers/enrich.py", "scrapers/komponen.py", "scrapers/dokumen_isb.py",
     "db_komponen.py", "komponen_routes.py", "ekspor.py",
+    "scrapers/kualitas.py", "scrapers/kontak.py", "scrapers/pesan_web.py",
 )
 
 
@@ -85,6 +86,24 @@ import backup  # noqa: E402
 
 # Database tidak lagi ada di git — cadangan harian dibuat saat app dinyalakan.
 backup.backup_harian_latar()
+
+
+def _saring_awal():
+    """
+    Aturan scrapers/kualitas.py baru / berubah → bersihkan data lama Klien
+    Website sekali (±30 detik untuk 20 ribu lead). Cadangan dibuat dulu.
+    Jalan di latar supaya server langsung bisa dibuka.
+    """
+    try:
+        hasil = db.pastikan_saring_terbaru(sebelum=backup.buat_backup)
+        if hasil:
+            print("  Saringan kualitas Klien Website: "
+                  + ", ".join(f"{k} {v}" for k, v in hasil.most_common()))
+    except Exception as e:
+        print(f"  ⚠ Saringan kualitas gagal: {type(e).__name__}: {e}")
+
+
+threading.Thread(target=_saring_awal, daemon=True).start()
 
 
 # ─── Helper job ───────────────────────────────────────────────────────────────
@@ -811,17 +830,34 @@ def _filter_dari_request(sumber=None):
         "kota": s("kota"),
         "kanal": s("kanal"),
         "tab": s("tab") if s("tab") != "semua" else None,
+        "verif": s("verif"),
         "follow_up": str(a.get("fu")) == "1",
         # Tab "Sudah Dikontak" paling berguna diurutkan dari kontak terakhir.
         "urut": a.get("urut") or ("dihubungi" if s("tab") == "sudah" else "skor_pembeli"),
     }
 
 
-@app.route("/leads")
-def leads():
+def _siapkan_baris(r, atur):
+    """
+    Lengkapi satu lead untuk ditampilkan: tautan WhatsApp berisi pesan pembuka
+    yang sudah dirakit (teks dari "Pengaturan pesan"), nomor WA 08xx, dan
+    semua email.
+    """
     from urllib.parse import quote
 
     from scrapers import kontak, pesan_web
+    if r.get("whatsapp_link"):
+        pesan = pesan_web.isi_pesan(r, atur)["wa"]["isi"]
+        r["wa_pitch"] = r["whatsapp_link"].split("?")[0] + "?text=" + quote(pesan)
+    else:
+        r["wa_pitch"] = ""
+    r["nomor_wa"] = kontak.nomor_wa(r)
+    r["email_semua"] = kontak.email_semua(r)
+    return r
+
+
+@app.route("/leads")
+def leads():
     from scrapers.scoring import URUTAN_TIER
 
     filters = _filter_dari_request()
@@ -839,13 +875,7 @@ def leads():
     # yang diedit user di "Pengaturan pesan".
     atur = _pengaturan_pesan()
     for r in rows:
-        if r.get("whatsapp_link"):
-            pesan = pesan_web.isi_pesan(r, atur)["wa"]["isi"]
-            r["wa_pitch"] = r["whatsapp_link"].split("?")[0] + "?text=" + quote(pesan)
-        else:
-            r["wa_pitch"] = ""
-        r["nomor_wa"] = kontak.nomor_wa(r)
-        r["email_semua"] = kontak.email_semua(r)
+        _siapkan_baris(r, atur)
 
     total_halaman = max((total + per_halaman - 1) // per_halaman, 1)
     return render_template(
@@ -853,7 +883,7 @@ def leads():
         leads=rows, total=total, halaman=halaman, total_halaman=total_halaman,
         filters=filters,
         args={k: v for k, v in request.args.items() if k not in ("hal", "kosong")},
-        tabs=db.TAB_LEADS, tab_aktif=filters["tab"] or "semua",
+        tabs=db.TAB_LEADS_WEB, tab_aktif=filters["tab"] or "semua",
         jumlah_tab=db.hitung_tab_leads(**filters),
         opsi_kota=db.nilai_unik("kota"),
         opsi_tier=[t for t in URUTAN_TIER],
@@ -863,6 +893,114 @@ def leads():
         stats=db.stats(),
         kosong=request.args.get("kosong") == "1",
     )
+
+
+# ─── Verifikasi manual & saringan kualitas ────────────────────────────────────
+
+@app.route("/leads/verifikasi")
+def leads_verifikasi():
+    """Antrean verifikasi: satu lead per layar, filter halaman Leads ikut terbawa."""
+    args = {k: v for k, v in request.args.items() if k not in ("hal", "tab")}
+    return render_template("leads_verifikasi.html", args=args, stats=db.stats())
+
+
+@app.route("/leads/verifikasi/berikut")
+def leads_verifikasi_berikut():
+    """Lead berikutnya yang belum diverifikasi (skor tertinggi dulu)."""
+    filters = _filter_dari_request()
+    filters["tab"] = None
+    filters["verif"] = "belum"
+    kecuali = [k for k in (request.args.get("kecuali") or "").split(",") if k]
+    rows, sisa = db.query_leads(**filters, kecuali=kecuali, limit=1)
+    _, total = db.query_leads(**filters, limit=1)
+    if not rows:
+        return jsonify({"ok": True, "lead": None, "sisa": 0, "total": total})
+    lead = _siapkan_baris(rows[0], _pengaturan_pesan())
+    return jsonify({"ok": True, "lead": lead, "sisa": sisa, "total": total})
+
+
+@app.route("/leads/verifikasi", methods=["POST"])
+def leads_verifikasi_simpan():
+    """
+    hasil: "valid" | "tidak_valid" (hapus + jangan ambil lagi) | "kembalikan"
+    (dari tab Disaring → valid) | "batal" (urungkan Valid → belum).
+    """
+    d = request.get_json(silent=True) or {}
+    keys = d.get("keys") or ([d["place_key"]] if d.get("place_key") else [])
+    if not keys:
+        return jsonify({"ok": False, "error": "Pilih minimal satu lead."}), 400
+    hasil = d.get("hasil")
+    if hasil in ("valid", "kembalikan"):
+        n = db.set_verifikasi(keys, "valid")
+    elif hasil == "batal":
+        n = db.set_verifikasi(keys, "")
+    elif hasil == "tidak_valid":
+        n = db.hapus_leads(keys, jangan_ambil_lagi=True, alasan="tidak valid (verifikasi)")
+    else:
+        return jsonify({"ok": False, "error": "Hasil verifikasi tidak dikenal."}), 400
+    return jsonify({"ok": True, "jumlah": n})
+
+
+def _saring_ulang(params, cb):
+    cb(5, "Menyaring ulang seluruh lead Klien Website...", 0)
+    hasil = db.saring_kualitas(cb=lambda m: cb(None, m, None))
+    for k, v in hasil.most_common():
+        cb(None, f"  {k}: {v}", None)
+    return "saring"
+
+
+def _cek_email_mx(params, cb, should_stop):
+    """Cek MX semua domain email lead, buang email ke domain mati, saring ulang."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    from scrapers import kualitas
+    domain = db.domain_email_belum_dicek()
+    if not domain:
+        cb(100, "Semua email sudah pernah dicek.", 0)
+        return "cek-email"
+    cb(2, f"Mengecek {len(domain)} domain email (MX record)...", 0)
+    hasil = {}
+    with ThreadPoolExecutor(max_workers=16) as ex:
+        tugas = {ex.submit(kualitas.cek_domain_email, d): d for d in domain}
+        for i, f in enumerate(as_completed(tugas), 1):
+            if should_stop():
+                for t in tugas:
+                    t.cancel()
+                break
+            d = tugas[f]
+            try:
+                hasil[d] = f.result()
+            except Exception:
+                hasil[d] = None
+            if hasil[d] is False:
+                cb(None, f"✗ {d} tidak bisa menerima email", None)
+            if i % 20 == 0:
+                cb(int(5 + 80 * i / len(domain)), f"{i}/{len(domain)} domain dicek", i)
+    mati = sum(1 for v in hasil.values() if v is False)
+    baris, dibuang = db.terapkan_cek_email(hasil)
+    cb(88, f"{mati} domain mati · {dibuang} email dibuang dari {baris} lead", len(hasil))
+    cb(90, "Menyaring ulang (lead yang kini tanpa kontak ikut disaring)...", len(hasil))
+    db.saring_kualitas()
+    return "cek-email"
+
+
+@app.route("/leads/saring-ulang", methods=["POST"])
+def leads_saring_ulang():
+    if job_berjalan("gmaps") or job_berjalan("saring"):
+        return jsonify({"ok": False, "error": "Tunggu scraping / penyaringan yang sedang "
+                                              "berjalan selesai dulu."}), 409
+    job_id = _new_job()
+    _jalankan(job_id, _saring_ulang, {}, "Saring ulang", jenis="saring")
+    return jsonify({"ok": True, "job_id": job_id})
+
+
+@app.route("/leads/cek-email", methods=["POST"])
+def leads_cek_email():
+    if job_berjalan("saring"):
+        return jsonify({"ok": False, "error": "Penyaringan lain sedang berjalan."}), 409
+    job_id = _new_job()
+    _jalankan(job_id, _cek_email_mx, {}, "Cek email (MX)", jenis="saring")
+    return jsonify({"ok": True, "job_id": job_id})
 
 
 @app.route("/leads/hapus", methods=["POST"])

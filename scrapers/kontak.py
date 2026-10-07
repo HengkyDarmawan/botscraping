@@ -15,7 +15,7 @@ scoring memanggil rapikan_kontak lewat impor malas di dalam nilai_lead.
 import re
 
 from scrapers import scoring
-from scrapers.enrich import klasifikasi_tautan
+from scrapers.enrich import klasifikasi_tautan, url_pinjaman
 
 MODE_WA = "wa"
 MODE_EMAIL = "email"
@@ -43,6 +43,9 @@ def punya_wa(row):
 
 
 def punya_email(row):
+    # email_valid = 0: domainnya terbukti tidak bisa menerima email (cek MX).
+    if str(row.get("email_valid")) == "0":
+        return False
     return bool(str(row.get("email") or "").strip())
 
 
@@ -104,7 +107,7 @@ def bisa_dilengkapi_website(row):
     memuat kontak penjual, jadi membukanya tidak akan menghasilkan apa-apa.
     """
     url = str(row.get("website") or "").strip()
-    if not url:
+    if not url or url_pinjaman(url):
         return False
     return klasifikasi_tautan(url) in ("", "linkinbio")
 
@@ -133,7 +136,7 @@ def rapikan_kontak(row):
     if jenis in _KOLOM_TAUTAN:
         if not str(row.get(jenis) or "").strip():
             row[jenis] = web.split("?")[0]
-    row["website_utama"] = web if (web and jenis == "") else (
+    row["website_utama"] = web if (web and jenis == "" and not url_pinjaman(web)) else (
         row.get("website_utama") or "")
 
     wa_web = [scoring.normalisasi_nomor(n) for n in

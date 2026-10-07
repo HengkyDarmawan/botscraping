@@ -3,7 +3,8 @@
    urutan TIDAK, supaya tiap tab memakai urutan bawaannya ("Sudah Dikontak" =
    kontak terakhir di atas). #}
 {% set ikon_tab = {'semua': 'bi-list-ul', 'dipin': 'bi-star-fill text-warning', 'belum': 'bi-hourglass-split',
-                   'sudah': 'bi-check2-circle text-success', 'fu': 'bi-alarm text-danger', 'selesai': 'bi-flag'} %}
+                   'sudah': 'bi-check2-circle text-success', 'fu': 'bi-alarm text-danger', 'selesai': 'bi-flag',
+                   'verif': 'bi-patch-question text-info', 'disaring': 'bi-funnel text-secondary'} %}
 {% set args_tab = {} %}
 {% for k, v in args.items() if k not in ('urut', 'tab', 'fu') %}{% set _ = args_tab.update({k: v}) %}{% endfor %}
 <ul class="nav nav-tabs tab-leads flex-nowrap overflow-auto">

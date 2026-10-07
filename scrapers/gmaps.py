@@ -38,7 +38,7 @@ from playwright.async_api import async_playwright, TimeoutError as PlaywrightTim
 from playwright_stealth import Stealth
 
 import db
-from scrapers import enrich, komponen, kontak, scoring
+from scrapers import enrich, komponen, kontak, kualitas, scoring
 
 OUTPUT_DIR = Path("output")
 
@@ -204,7 +204,8 @@ def _has_website(row):
     w = str(row.get("website") or "").strip().lower()
     if not w or w in ("-", "n/a", "none"):
         return False
-    return not enrich.url_sosmed(w)
+    # Listing OTA / link booking Google juga bukan website milik bisnisnya.
+    return not (enrich.url_sosmed(w) or enrich.url_pinjaman(w))
 
 
 def _radius_km_to_zoom(km):
@@ -570,6 +571,10 @@ def _lolos_filter_awal(kartu, f):
         if not _is_wa(kartu["telepon"]):
             return False
     if not f.get("sertakan_tutup") and kartu.get("tutup"):
+        return False
+    # Klien Website: Blogspot, fasilitas umum, nama generik — sudah pasti dari
+    # kartu, jadi halaman detailnya tidak perlu dibuka.
+    if f.get("saring_kualitas") and kualitas.alasan_kartu(kartu):
         return False
     # Bisnis yang pada run sebelumnya sudah dinyatakan tutup, tidak punya kontak
     # yang diminta (mode yang sama), atau dihapus user — tidak perlu dibuka lagi.
@@ -1210,7 +1215,7 @@ async def _scrape_query(browser, ua, query, area_tag, max_results, params, cb,
     FEED = 'div[role="feed"]'
     hasil = {"baru": [], "update": [], "dilewati": 0, "filter_awal": 0,
              "gagal": 0, "dari_kartu": 0, "tutup": 0, "kontak_kurang": 0,
-             "filter_detail": 0, "email_ganda": 0}
+             "filter_detail": 0, "email_ganda": 0, "kualitas": 0}
 
     filters = params.get("_filters", {})
     pf = _profil(params)
@@ -1477,6 +1482,19 @@ async def _scrape_query(browser, ua, query, area_tag, max_results, params, cb,
                 return
 
             kontak.rapikan_kontak(baris)
+            # Saringan kualitas Klien Website (scrapers/kualitas.py). Syarat
+            # kontak belum dicek di sini: email sering baru ketemu di website.
+            if filters.get("saring_kualitas"):
+                sampah = kualitas.alasan_sampah(baris, cek_kontak=False)
+                if not sampah:
+                    pemilik = db.wa_dipakai(baris.get("whatsapp_link"), kunci)
+                    if pemilik:
+                        sampah = f"nomor WA sama dengan '{pemilik[:40]}'"
+                if sampah:
+                    db.lewati_catat(kunci, nama_baca, sampah, "kualitas")
+                    hasil["kualitas"] += 1
+                    cb(pct, f"⏭ Dilewati: {nama_baca} ({sampah})", len(hasil["baru"]))
+                    return
             ganda = _cek_email_ganda(baris, filters)
             if ganda:
                 db.lewati_catat(kunci, nama_baca, ganda, "email")
@@ -1660,9 +1678,20 @@ async def _async_main(params, cb, should_stop=None):
         # lagi — satu email cukup satu penawaran. Bawaan aktif di ruang komponen.
         "lewati_email_ganda": bool(opsi("lewati_email_ganda",
                                         pf["nama"] == "komponen")),
+        # Klien Website: buang yang bukan calon pembeli saat scraping
+        # (scrapers/kualitas.py) — Blogspot, fasilitas umum, nama generik,
+        # listing hantu, cabang yang nomor WA/email-nya sudah dipakai.
+        "saring_kualitas": bool(opsi("saring_kualitas", pf["nama"] == "webdev")),
     }
     if pf["nama"] == "komponen" and not params.get("mode_kontak"):
         filter_flags["mode_kontak"] = kontak.MODE_WA_ATAU_EMAIL
+    if filter_flags["saring_kualitas"]:
+        # Lead tanpa WA & email tidak bisa ditawari apa pun: mode kontak yang
+        # lebih longgar dinaikkan ke "WhatsApp atau email".
+        if filter_flags["mode_kontak"] in (kontak.MODE_BEBAS, kontak.MODE_TELEPON,
+                                           kontak.MODE_APA_SAJA):
+            filter_flags["mode_kontak"] = kontak.MODE_WA_ATAU_EMAIL
+        filter_flags["lewati_email_ganda"] = True
     filter_flags["_lewati"] = _penyaring_lewati(filter_flags["mode_kontak"])
     params["_filters"] = filter_flags
     # 0 = otomatis (lihat _konkuren_listing): 5 tanpa proxy, 8 dengan proxy.
@@ -1724,7 +1753,7 @@ async def _async_main(params, cb, should_stop=None):
     dilihat = set()
     stat = {"dilewati": 0, "filter_awal": 0, "gagal": 0, "duplikat": 0,
             "dari_kartu": 0, "tutup": 0, "kontak_kurang": 0, "filter_detail": 0,
-            "email_ganda": 0}
+            "email_ganda": 0, "kualitas": 0}
     n_queries = max(len(search_targets), 1)
     galat_fatal = None
 
@@ -1753,6 +1782,15 @@ async def _async_main(params, cb, should_stop=None):
             await enrich.enrich_banyak(baris_baru, konkuren=enrich_konkuren, cb=cb,
                                        should_stop=should_stop, timeout=enrich_timeout)
             for row in baris_baru:
+                if filter_flags.get("saring_kualitas") and kualitas.website_blog(
+                        row.get("website"), row.get("web_platform")):
+                    db.buang_lead(row.get("place_key"), row.get("nama_bisnis"),
+                                  "website blog (Blogspot)", "kualitas")
+                    row["_kualitas"] = True
+                    dibuang.append(row)
+                    cb(None, f"⏭ Dilewati: {row.get('nama_bisnis', '?')} "
+                             f"(website blog)", None)
+                    continue
                 # Email umumnya baru muncul dari website, jadi cek ganda di sini
                 # untuk SEMUA baris baru — termasuk yang sudah lolos lewat WA.
                 # Diproses berurutan & disimpan sebelum baris berikutnya dicek,
@@ -1848,9 +1886,12 @@ async def _async_main(params, cb, should_stop=None):
                         segar = [r for r in segar if r not in dibuang]
                         hasil["baru"] = [r for r in hasil["baru"] if r not in dibuang]
                         n_ganda = sum(1 for r in dibuang if r.get("_email_ganda"))
+                        n_kualitas = sum(1 for r in dibuang if r.get("_kualitas"))
                         hasil["email_ganda"] += n_ganda
-                        hasil["kontak_kurang"] += len(dibuang) - n_ganda
+                        hasil["kualitas"] += n_kualitas
+                        hasil["kontak_kurang"] += len(dibuang) - n_ganda - n_kualitas
                     stat["tutup"] += hasil.get("tutup", 0)
+                    stat["kualitas"] += hasil.get("kualitas", 0)
                     stat["email_ganda"] += hasil.get("email_ganda", 0)
                     stat["kontak_kurang"] += hasil.get("kontak_kurang", 0)
                     stat["filter_detail"] += hasil.get("filter_detail", 0)
@@ -1876,6 +1917,8 @@ async def _async_main(params, cb, should_stop=None):
                         tersaring += f", {hasil['filter_detail']} tidak lolos filter"
                     if hasil.get("email_ganda"):
                         tersaring += f", {hasil['email_ganda']} email sudah dipakai lead lain"
+                    if hasil.get("kualitas"):
+                        tersaring += f", {hasil['kualitas']} bukan calon pembeli (saringan kualitas)"
                     cb(offset + rng,
                        f"Subtotal '{query}': {len(hasil['baru'])} baru, "
                        f"{hasil['dilewati']} sudah ada di database{tersaring}, "
@@ -2013,6 +2056,9 @@ def _selesaikan_run(run_id, status, stat, filter_flags, hasil_gemini,
     ringkasan["Dilewati — rating/ulasan/website/kategori"] = stat.get("filter_detail", 0)
     if filter_flags.get("lewati_email_ganda"):
         ringkasan["Dilewati — email sudah dipakai lead lain"] = stat.get("email_ganda", 0)
+    if filter_flags.get("saring_kualitas"):
+        ringkasan["Dilewati — saringan kualitas (blog/fasilitas umum/cabang/listing hantu)"] = \
+            stat.get("kualitas", 0)
     ringkasan["Syarat kontak"] = kontak.LABEL_MODE.get(
         filter_flags.get("mode_kontak"), "-")
     if galat_fatal:
