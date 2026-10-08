@@ -322,11 +322,14 @@ def _buat_satu(row, atur, tgl, baru=False):
         row["place_key"], tanggal,
         lambda u: dok.bentuk_nomor(atur["pola_nomor"], u, tgl), baru=baru)
     folder = dok.folder_hari(tgl)
-    dasar = folder / dok.nama_berkas(urut, row, tgl)
-    dok.isi_proposal(row, atur, nomor, tgl, dasar.with_suffix(".docx"))
+    # Nama file dirangkai sebagai teks, BUKAN lewat Path.with_suffix(): lead
+    # bernama "PT. Lion Wings" membuat with_suffix memperlakukan " Lion Wings"
+    # sebagai ekstensi lalu menggantinya, dan filenya jadi "001 - PT.docx".
+    nama = dok.nama_berkas(urut, row, tgl)
+    docx = folder / f"{nama}.docx"
+    dok.isi_proposal(row, atur, nomor, tgl, docx)
     return {"place_key": row["place_key"], "nama": row.get("nama_bisnis"),
-            "nomor": nomor, "docx": dasar.with_suffix(".docx"),
-            "pdf": dasar.with_suffix(".pdf")}
+            "nomor": nomor, "docx": docx, "pdf": folder / f"{nama}.pdf"}
 
 
 def _relatif(p):

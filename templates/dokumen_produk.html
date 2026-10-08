@@ -1,0 +1,293 @@
+{% extends "base.html" %}
+{% block title %}Katalog Produk — LeadScraper Pro{% endblock %}
+{% block page_title %}Katalog Produk{% endblock %}
+
+{% block content %}
+<style>
+  .wajib { color: #dc3545; font-weight: 700; margin-left: .15rem; }
+  #tabelProduk td { vertical-align: middle; }
+  .mati { opacity: .5; }
+</style>
+
+<div class="d-flex flex-wrap gap-2 align-items-center mb-3">
+  <button class="btn btn-primary" onclick="Produk.baru()">
+    <i class="bi bi-plus-lg me-1"></i>Tambah produk
+  </button>
+  <button class="btn btn-outline-success" onclick="Impor.buka()">
+    <i class="bi bi-file-earmark-excel me-1"></i>Impor dari Excel/CSV
+  </button>
+  <button class="btn btn-outline-secondary" onclick="Produk.ekspor()">
+    <i class="bi bi-download me-1"></i>Ekspor katalog
+  </button>
+  <a href="/dokumen/baru" class="btn btn-outline-primary ms-auto">
+    <i class="bi bi-file-earmark-plus me-1"></i>Buat Dokumen
+  </a>
+</div>
+
+<div class="card">
+  <div class="card-body p-0">
+    {% if produk %}
+    <div class="table-responsive">
+      <table class="table table-sm table-hover mb-0" id="tabelProduk">
+        <thead class="table-light">
+          <tr>
+            <th>Kode</th><th>Nama</th><th>Kategori</th><th>Satuan</th>
+            <th>Siklus</th><th class="text-end">Harga</th><th>S&amp;K bawaan</th><th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for p in produk %}
+          <tr data-produk="{{ p|tojson|forceescape }}" class="{% if not p.aktif %}mati{% endif %}">
+            <td class="small"><code>{{ p.kode or '—' }}</code></td>
+            <td class="small">
+              {{ p.nama }}
+              {% if not p.aktif %}<span class="badge bg-secondary">nonaktif</span>{% endif %}
+              {% if p.deskripsi %}<div class="text-muted" style="font-size:.72rem">{{ p.deskripsi }}</div>{% endif %}
+            </td>
+            <td class="small">{{ p.kategori or '—' }}</td>
+            <td class="small">{{ p.satuan or '—' }}</td>
+            <td class="small">{{ p.siklus }}</td>
+            <td class="text-end text-nowrap small">Rp {{ '{:,}'.format(p.harga).replace(',', '.') }}</td>
+            <td class="text-center small">
+              {% if p.syarat_bawaan %}
+              <span class="badge bg-info text-dark" title="{{ p.syarat_bawaan|join(' | ') }}">
+                {{ p.syarat_bawaan|length }}</span>
+              {% else %}—{% endif %}
+            </td>
+            <td class="text-nowrap">
+              <button class="btn btn-sm btn-outline-secondary py-0 btn-edit" title="Edit">
+                <i class="bi bi-pencil"></i></button>
+              <button class="btn btn-sm btn-outline-danger py-0 btn-hapus" title="Hapus">
+                <i class="bi bi-trash"></i></button>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <div class="p-2 text-muted small border-top">{{ produk|length }} produk</div>
+    {% else %}
+    <div class="p-5 text-center text-muted">
+      <i class="bi bi-box-seam fs-1 d-block mb-3"></i>
+      <p class="mb-1"><strong>Katalog masih kosong.</strong></p>
+      <p class="small">Isi katalog sekali, lalu setiap penawaran cukup pilih produk
+        dan ubah jumlahnya.</p>
+      <div class="d-flex gap-2 justify-content-center mt-3">
+        <button class="btn btn-primary" onclick="Produk.baru()">
+          <i class="bi bi-plus-lg me-1"></i>Tambah produk</button>
+        <button class="btn btn-outline-success" onclick="Impor.buka()">
+          <i class="bi bi-file-earmark-excel me-1"></i>Impor dari Excel</button>
+      </div>
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+<!-- ─── Modal produk ─────────────────────────────────────────────────────── -->
+<div class="modal fade" id="modalProdukEdit" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="bi bi-box-seam me-2"></i><span id="judulProduk">Tambah produk</span></h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="p_id">
+        <div class="row g-2">
+          <div class="col-12">
+            <label class="form-label small">Nama produk / jasa<span class="wajib">*</span></label>
+            <input class="form-control" id="p_nama">
+          </div>
+          <div class="col-md-4">
+            <label class="form-label small">Harga<span class="wajib">*</span></label>
+            <input class="form-control" id="p_harga" placeholder="Rp 1.250.000">
+          </div>
+          <div class="col-md-4">
+            <label class="form-label small">Satuan<span class="wajib">*</span></label>
+            <input class="form-control" id="p_satuan" placeholder="bulan / user / unit / paket">
+          </div>
+          <div class="col-md-4">
+            <label class="form-label small">Siklus</label>
+            <select class="form-select" id="p_siklus">
+              {% for s in siklus %}<option value="{{ s }}">{{ s }}</option>{% endfor %}
+            </select>
+            <div class="form-text">Untuk SaaS: pilih bulanan/tahunan.</div>
+          </div>
+          <div class="col-md-5">
+            <label class="form-label small">Kode <span class="text-muted">(opsional)</span></label>
+            <input class="form-control" id="p_kode" placeholder="SAAS-CRM">
+            <div class="form-text">Dipakai saat impor untuk memperbarui, bukan menambah.</div>
+          </div>
+          <div class="col-md-7">
+            <label class="form-label small">Kategori <span class="text-muted">(opsional)</span></label>
+            <input class="form-control" id="p_kategori" list="daftarKategori" placeholder="SaaS / Jasa / Hardware">
+            <datalist id="daftarKategori">
+              {% for k in kategori %}<option value="{{ k }}">{% endfor %}
+            </datalist>
+          </div>
+          <div class="col-12">
+            <label class="form-label small">Deskripsi / spesifikasi <span class="text-muted">(opsional)</span></label>
+            <textarea class="form-control" id="p_deskripsi" rows="2"></textarea>
+          </div>
+          <div class="col-12">
+            <label class="form-label small">Syarat &amp; ketentuan bawaan <span class="text-muted">(opsional)</span></label>
+            <textarea class="form-control" id="p_syarat" rows="3"
+                      placeholder="Satu butir per baris, mis.&#10;Langganan berlaku 12 bulan sejak tanggal aktivasi.&#10;Perpanjangan ditawarkan ulang sebelum masa langganan berakhir."></textarea>
+            <div class="form-text">Ikut terpasang otomatis setiap produk ini dipakai di dokumen.</div>
+          </div>
+          <div class="col-12">
+            <div class="form-check">
+              <input class="form-check-input" type="checkbox" id="p_aktif" checked>
+              <label class="form-check-label small" for="p_aktif">Aktif (muncul saat memilih produk)</label>
+            </div>
+          </div>
+        </div>
+        <div id="pesanProduk" class="mt-2"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline-secondary" data-bs-dismiss="modal">Batal</button>
+        <button class="btn btn-primary" onclick="Produk.simpan()">Simpan</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ─── Modal impor ──────────────────────────────────────────────────────── -->
+<div class="modal fade" id="modalImpor" tabindex="-1">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="bi bi-file-earmark-excel me-2"></i>Impor Katalog</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <p class="small text-muted">
+          Judul kolom yang dikenali (huruf besar/kecil bebas):
+          <code>kode</code> <code>nama</code> <code>deskripsi</code>
+          <code>satuan</code> <code>harga</code> <code>siklus</code>
+          <code>kategori</code>. Hanya <code>nama</code> dan <code>harga</code> yang wajib.
+        </p>
+        <p class="small text-muted">
+          Baris dengan kode yang sudah ada akan diperbarui, bukan ditambah ganda.
+          Harga berisi pecahan ditolak supaya tidak ada angka pecahan yang masuk ke invoice.
+        </p>
+        <input type="file" class="form-control" id="berkasImpor" accept=".xlsx,.xls,.csv">
+        <div id="pesanImpor" class="mt-3"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline-secondary" data-bs-dismiss="modal">Tutup</button>
+        <button class="btn btn-success" onclick="Impor.jalankan()">Impor</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+const Produk = (() => {
+  let modal = null;
+  const el = (id) => document.getElementById(id);
+
+  function tampil(p) {
+    modal = modal || new bootstrap.Modal(el('modalProdukEdit'));
+    el('pesanProduk').innerHTML = '';
+    el('judulProduk').textContent = p ? 'Edit produk' : 'Tambah produk';
+    el('p_id').value = p ? p.id : '';
+    el('p_nama').value = p ? p.nama : '';
+    el('p_harga').value = p ? p.harga : '';
+    el('p_satuan').value = p ? p.satuan : '';
+    el('p_siklus').value = p ? p.siklus : 'sekali';
+    el('p_kode').value = p ? p.kode : '';
+    el('p_kategori').value = p ? p.kategori : '';
+    el('p_deskripsi').value = p ? p.deskripsi : '';
+    el('p_syarat').value = p ? (p.syarat_bawaan || []).join('\n') : '';
+    el('p_aktif').checked = p ? !!p.aktif : true;
+    modal.show();
+  }
+
+  async function simpan() {
+    const muatan = {
+      id: el('p_id').value || null,
+      nama: el('p_nama').value, harga: el('p_harga').value,
+      satuan: el('p_satuan').value, siklus: el('p_siklus').value,
+      kode: el('p_kode').value, kategori: el('p_kategori').value,
+      deskripsi: el('p_deskripsi').value,
+      syarat_bawaan: el('p_syarat').value,
+      aktif: el('p_aktif').checked ? 1 : 0,
+    };
+    const d = await (await fetch('/dokumen/produk/simpan', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(muatan),
+    })).json();
+    if (!d.ok) {
+      el('pesanProduk').innerHTML =
+        `<div class="alert alert-danger py-2 small mb-0">${escapeHtml(d.error)}</div>`;
+      return;
+    }
+    window.location.reload();
+  }
+
+  async function ekspor() {
+    const d = await (await fetch('/dokumen/produk/ekspor')).json();
+    if (!d.ok) { alert(d.error || 'Gagal'); return; }
+    window.location = d.url;
+  }
+
+  return { baru: () => tampil(null), edit: tampil, simpan, ekspor };
+})();
+
+const Impor = (() => {
+  let modal = null;
+
+  function buka() {
+    modal = modal || new bootstrap.Modal(document.getElementById('modalImpor'));
+    document.getElementById('pesanImpor').innerHTML = '';
+    modal.show();
+  }
+
+  async function jalankan() {
+    const berkas = document.getElementById('berkasImpor').files[0];
+    const pesan = document.getElementById('pesanImpor');
+    if (!berkas) {
+      pesan.innerHTML = '<div class="alert alert-warning py-2 small mb-0">Pilih file dulu.</div>';
+      return;
+    }
+    const data = new FormData();
+    data.append('berkas', berkas);
+    pesan.innerHTML = '<div class="spinner-border spinner-border-sm"></div> Memproses...';
+    const d = await (await fetch('/dokumen/produk/impor', { method: 'POST', body: data })).json();
+    if (!d.ok) {
+      pesan.innerHTML = `<div class="alert alert-danger py-2 small mb-0">${escapeHtml(d.error)}</div>`;
+      return;
+    }
+    let html = `<div class="alert alert-success py-2 small mb-0">
+      ${d.jumlah} produk masuk.`;
+    if (d.gagal.length) {
+      html += `<div class="mt-2 text-danger">${d.gagal.length} baris dilewati:<ul class="mb-0">`
+        + d.gagal.slice(0, 10).map((g) => `<li>${escapeHtml(g)}</li>`).join('')
+        + (d.gagal.length > 10 ? `<li>+${d.gagal.length - 10} lainnya</li>` : '')
+        + '</ul></div>';
+    }
+    pesan.innerHTML = html + '</div>';
+    setTimeout(() => window.location.reload(), d.gagal.length ? 4000 : 900);
+  }
+
+  return { buka, jalankan };
+})();
+
+document.querySelectorAll('#tabelProduk tr[data-produk]').forEach((tr) => {
+  const p = JSON.parse(tr.dataset.produk);
+  tr.querySelector('.btn-edit').addEventListener('click', () => Produk.edit(p));
+  tr.querySelector('.btn-hapus').addEventListener('click', async () => {
+    if (!confirm(`Hapus produk "${p.nama}" dari katalog?`)) return;
+    const d = await (await fetch('/dokumen/produk/hapus', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: p.id }),
+    })).json();
+    if (d.ok) tr.remove();
+    else alert(d.error || 'Gagal menghapus');
+  });
+});
+</script>
+{% endblock %}

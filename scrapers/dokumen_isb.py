@@ -17,32 +17,30 @@ templatenya berubah bentuk — proses berhenti dengan pesan jelas daripada
 menghasilkan surat yang separuh terisi. Tanda klasifikasi yang disisipkan Word
 lewat sensitivity label Microsoft 365 (mis. "[ OFFICIAL ]" di header/footer)
 bukan placeholder — dibiarkan apa adanya.
+
+Helper generik (penelusuran paragraf, pengganti placeholder, format tanggal &
+nomor, konversi PDF) tinggal di `scrapers/docx_inti.py` dan dipakai bersama
+dengan `scrapers/dokumen_buat.py`. Modul ini MENGIMPOR, tidak menyalin: `ke_pdf`
+dijaga satu `threading.Lock` di tingkat modul, dan dua salinan fungsi itu berarti
+dua kunci berbeda — yaitu dua Microsoft Word berjalan bersamaan dan PDF rusak.
+Nama-nama di bawah di-ekspor ulang karena `komponen_routes.py` memanggilnya
+sebagai `dok.<nama>`.
 """
 import re
-import threading
 import zipfile
 from pathlib import Path
+
+from scrapers import docx_inti
+from scrapers.docx_inti import (  # noqa: F401 — ekspor ulang, lihat docstring
+    BULAN, _hapus_sorotan, _isi_paragraf, _KUNCI_WORD, _nama_file,
+    _RE_PENANDA, _RE_SISA, _semua_paragraf, _sisa_placeholder, bentuk_nomor,
+    ke_pdf, ringkas_galat_pdf, romawi, tanggal_indonesia)
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 FOLDER_DOKUMEN = BASE_DIR / "dokumen"
 TEMPLATE_PROPOSAL = FOLDER_DOKUMEN / "Proposal Kerja Sama ISB.docx"
 TEMPLATE_EMAIL = FOLDER_DOKUMEN / "Template Email ISB.docx"
 FOLDER_PROPOSAL = BASE_DIR / "output" / "proposal"
-
-BULAN = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli",
-         "Agustus", "September", "Oktober", "November", "Desember"]
-
-_RE_SISA = re.compile(r"\[[^\]\n]{2,60}\]|\{\{[^}]+\}\}")
-# Tanda klasifikasi sensitivity label Microsoft 365 ("[ OFFICIAL ]",
-# "[ INTERNAL ]", ...) yang disisipkan Word ke header/footer — bukan placeholder.
-# Placeholder template asli selalu huruf campuran, jadi tidak ikut terkecuali.
-_RE_PENANDA = re.compile(r"^\[\s*[A-Z][A-Z0-9 \-:/]*\s*\]$")
-
-
-def _sisa_placeholder(teks):
-    """Placeholder yang masih tertinggal di `teks`, tanpa tanda klasifikasi Word."""
-    return {m.group() for m in _RE_SISA.finditer(teks)
-            if not _RE_PENANDA.match(m.group())}
 
 
 def company_profile():
@@ -51,36 +49,11 @@ def company_profile():
     return kandidat[0] if kandidat else None
 
 
-# ─── Format tanggal & nomor ───────────────────────────────────────────────────
-
-def romawi(n):
-    angka = [(10, "X"), (9, "IX"), (5, "V"), (4, "IV"), (1, "I")]
-    hasil = ""
-    for nilai, huruf in angka:
-        while n >= nilai:
-            hasil += huruf
-            n -= nilai
-    return hasil
-
-
-def tanggal_indonesia(tgl):
-    return f"{tgl.day} {BULAN[tgl.month - 1]} {tgl.year}"
-
-
-def bentuk_nomor(pola, urut, tgl):
-    """Teks nomor surat dari pola pengaturan, mis. 001/ISB/SALES/26/IX/2026."""
-    try:
-        return pola.format(urut=urut, hari=tgl.day, bulan=tgl.month,
-                           tahun=tgl.year, romawi=romawi(tgl.month))
-    except (KeyError, IndexError, ValueError) as e:
-        raise ValueError(f"Pola nomor surat tidak valid ({pola!r}): {e}") from None
-
-
 def alamat_lengkap(row):
     """Alamat GMaps, ditambah kota bila alamatnya belum menyebut kota."""
-    # Lead lama tersimpan dengan ikon pin GMaps ("\n...") yang di Word
+    # Lead lama tersimpan dengan ikon pin GMaps ("\n...") yang di Word
     # tampil sebagai kotak di baris sendiri — ikon dibuang, spasi dirapikan.
-    alamat = re.sub(r"[-]", "", str(row.get("alamat") or ""))
+    alamat = re.sub(r"[-]", "", str(row.get("alamat") or ""))
     alamat = re.sub(r"\s+", " ", alamat).strip()
     kota = str(row.get("kota") or "").strip()
     if kota:
@@ -90,82 +63,7 @@ def alamat_lengkap(row):
     return alamat or "-"
 
 
-def _nama_file(teks, batas=60):
-    bersih = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', " ", str(teks or "")).strip(" .")
-    return re.sub(r"\s+", " ", bersih)[:batas].strip() or "Lead"
-
-
 # ─── Pengisian dokumen Word ───────────────────────────────────────────────────
-
-def _semua_paragraf(doc):
-    """Paragraf badan, tabel (bersarang), header, dan footer."""
-    def dari(wadah):
-        for p in wadah.paragraphs:
-            yield p
-        for t in getattr(wadah, "tables", []):
-            for baris in t.rows:
-                for sel in baris.cells:
-                    yield from dari(sel)
-    yield from dari(doc)
-    for s in doc.sections:
-        for bagian in (s.header, s.first_page_header, s.even_page_header,
-                       s.footer, s.first_page_footer, s.even_page_footer):
-            if bagian is not None and not bagian.is_linked_to_previous:
-                yield from dari(bagian)
-
-
-def _hapus_sorotan(run):
-    try:
-        run.font.highlight_color = None
-    except Exception:
-        pass
-
-
-def _isi_paragraf(p, ganti, nomor=None, pic=None):
-    """Ganti placeholder di satu paragraf. Return True bila ada yang berubah."""
-    runs = p.runs
-    berubah = False
-
-    # Baris "Nomor: [no. urut]/ISB/[bulan romawi]/2026" diganti utuh oleh nomor
-    # dari pola pengaturan: sisa run di belakangnya dikosongkan.
-    if nomor is not None and "[no. urut]" in p.text:
-        for i, r in enumerate(runs):
-            if "[no. urut]" in r.text:
-                r.text = r.text.split("[no. urut]")[0] + nomor
-                _hapus_sorotan(r)
-                for r2 in runs[i + 1:]:
-                    r2.text = ""
-                return True
-
-    for r in runs:
-        teks = r.text
-        for lama, baru in ganti.items():
-            if lama in teks:
-                teks = teks.replace(lama, baru)
-        if teks != r.text:
-            r.text = teks
-            _hapus_sorotan(r)
-            berubah = True
-
-    if pic and p.text.strip() == "Bapak/Ibu Pimpinan":
-        for r in runs:
-            if "Bapak/Ibu Pimpinan" in r.text:
-                r.text = r.text.replace("Bapak/Ibu Pimpinan", pic)
-                berubah = True
-
-    # Cadangan: placeholder yang terpecah ke beberapa run (terjadi bila template
-    # diedit di Word). Teksnya digabung ke run pertama — formatnya ikut run itu.
-    if runs and any(k in p.text for k in ganti):
-        teks = p.text
-        for lama, baru in ganti.items():
-            teks = teks.replace(lama, baru)
-        runs[0].text = teks
-        _hapus_sorotan(runs[0])
-        for r in runs[1:]:
-            r.text = ""
-        berubah = True
-    return berubah
-
 
 def isi_proposal(row, atur, nomor, tgl, tujuan_docx):
     """Tulis proposal terisi ke `tujuan_docx`. Raise ValueError bila template rusak."""
@@ -204,78 +102,13 @@ def isi_proposal(row, atur, nomor, tgl, tujuan_docx):
     return tujuan_docx
 
 
-# ─── Konversi PDF lewat Microsoft Word ────────────────────────────────────────
-
-_KUNCI_WORD = threading.Lock()
-
-
-def ke_pdf(pasangan):
-    """
-    Konversi [(docx, pdf), ...] memakai satu instance Microsoft Word.
-
-    Word COM tidak aman dipakai paralel, jadi dijaga satu kunci global. Tiap file
-    diputuskan sendiri: PDF lama yang sedang terbuka di pembaca PDF (terkunci)
-    hanya menggagalkan file itu, bukan seluruh batch.
-
-    Return {docx: None | pesan galat}. DOCX selalu tetap ada walau PDF gagal.
-    """
-    hasil = {asal: None for asal, _ in pasangan}
-    if not pasangan:
-        return hasil
-    try:
-        import pythoncom
-        import win32com.client
-    except ImportError:
-        return {a: "pywin32 belum terpasang (pip install pywin32)" for a in hasil}
-    with _KUNCI_WORD:
-        pythoncom.CoInitialize()
-        word = None
-        try:
-            word = win32com.client.DispatchEx("Word.Application")
-            word.Visible = False
-            word.DisplayAlerts = 0
-            for asal, tujuan in pasangan:
-                tujuan = Path(tujuan).resolve()
-                try:
-                    if tujuan.exists():
-                        # Gagal di sini = file sedang dibuka aplikasi lain.
-                        tujuan.unlink()
-                    d = word.Documents.Open(str(Path(asal).resolve()), ReadOnly=True,
-                                            AddToRecentFiles=False, Visible=False)
-                    try:
-                        d.SaveAs2(str(tujuan), FileFormat=17)  # wdFormatPDF
-                    finally:
-                        d.Close(False)
-                except PermissionError:
-                    hasil[asal] = (f"{tujuan.name} sedang dibuka aplikasi lain — tutup "
-                                   f"dulu lalu buat ulang")
-                except Exception as e:
-                    hasil[asal] = f"{type(e).__name__}: {e}"
-            return hasil
-        except Exception as e:
-            return {a: (v or f"Microsoft Word tidak bisa dijalankan ({type(e).__name__}: {e})")
-                    for a, v in hasil.items()}
-        finally:
-            if word is not None:
-                try:
-                    word.Quit()
-                except Exception:
-                    pass
-            pythoncom.CoUninitialize()
-
-
-def ringkas_galat_pdf(hasil):
-    """Satu kalimat peringatan dari hasil ke_pdf, atau None bila semua berhasil."""
-    galat = [f"{Path(a).stem}: {g}" for a, g in hasil.items() if g]
-    if not galat:
-        return None
-    return ("PDF gagal dibuat untuk " + "; ".join(galat[:5])
-            + (f" (+{len(galat) - 5} lainnya)" if len(galat) > 5 else "")
-            + ". File DOCX-nya tetap tersedia.")
-
-
 def folder_hari(tgl):
-    return FOLDER_PROPOSAL / tgl.strftime("%Y-%m-%d")
+    """Folder harian proposal ISB.
+
+    Tanda tangan satu argumen dipertahankan untuk `komponen_routes.py`; versi
+    umum yang menerima akar folder ada di `docx_inti.folder_hari`.
+    """
+    return docx_inti.folder_hari(FOLDER_PROPOSAL, tgl)
 
 
 def nama_berkas(urut, row, tgl):

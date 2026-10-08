@@ -56,6 +56,8 @@ _SUMBER_DIPANTAU = (
     "scrapers/enrich.py", "scrapers/komponen.py", "scrapers/dokumen_isb.py",
     "db_komponen.py", "komponen_routes.py", "ekspor.py",
     "scrapers/kualitas.py", "scrapers/kontak.py", "scrapers/pesan_web.py",
+    "scrapers/docx_inti.py", "scrapers/dokumen_buat.py",
+    "dokumen_db.py", "dokumen_routes.py",
 )
 
 
@@ -1214,6 +1216,13 @@ def preview(filename):
 import komponen_routes  # noqa: E402
 
 komponen_routes.pasang(app, _new_job, _jalankan, job_berjalan)
+
+
+# ─── Menu Dokumen & Surat ─────────────────────────────────────────────────────
+
+import dokumen_routes  # noqa: E402
+
+dokumen_routes.pasang(app)
 
 
 # ─── Run ──────────────────────────────────────────────────────────────────────

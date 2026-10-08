@@ -22,6 +22,13 @@ FOLDER = Path(__file__).resolve().parent / "data" / "backup"
 SIMPAN = 14
 _kunci = threading.Lock()
 
+# Database di luar ruang lead yang juga ikut dicadangkan, {nama: path}.
+# Modul pemiliknya mendaftarkan diri sendiri (mis. dokumen_db.init()) supaya
+# backup.py tidak perlu mengimpor modul-modul itu. Tanpa ini, database yang
+# bukan ruang lead tidak akan pernah ikut tercadangkan — dan dokumen seperti
+# invoice adalah catatan yang tidak boleh hilang.
+EKSTRA: dict = {}
+
 
 def daftar():
     """Zip backup yang ada, terbaru dulu."""
@@ -45,14 +52,14 @@ def terakhir():
 
 
 def buat_backup():
-    """Buat satu zip berisi salinan semua database ruang. Return path zip."""
+    """Buat satu zip berisi salinan semua database ruang + EKSTRA. Return path zip."""
     with _kunci:
         FOLDER.mkdir(parents=True, exist_ok=True)
         stempel = datetime.now().strftime("%Y%m%d_%H%M%S")
         tujuan = FOLDER / f"backup_{stempel}.zip"
         with tempfile.TemporaryDirectory() as tmp, \
                 zipfile.ZipFile(tujuan, "w", zipfile.ZIP_DEFLATED) as z:
-            for ruang, asal in db.RUANG_PATH.items():
+            for ruang, asal in {**db.RUANG_PATH, **EKSTRA}.items():
                 if not Path(asal).exists():
                     continue
                 salinan = Path(tmp) / Path(asal).name

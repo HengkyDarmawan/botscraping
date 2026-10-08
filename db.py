@@ -1394,25 +1394,48 @@ def update_crm(place_key, status=None, catatan=None, tanggal_follow_up=None,
     return get(place_key)
 
 
+def kv_ambil(conn, bawaan, kosong_boleh=()):
+    """
+    Isi tabel `pengaturan` pada `conn`; kunci yang belum disimpan pakai `bawaan`.
+
+    Inti baca pengaturan, terpisah dari koneksi & kunci, supaya `dokumen_db.py`
+    (database tersendiri di luar ruang lead) memakai logika yang sama persis
+    tanpa menyalinnya.
+
+    Nilai kosong biasanya berarti "belum diisi" dan dikembalikan ke bawaan.
+    Kunci di `kosong_boleh` dikecualikan: ada pengaturan yang memang sah
+    dikosongkan user (website, NIB, catatan footer) dan tidak boleh diam-diam
+    kembali ke nilai bawaan.
+    """
+    hasil = dict(bawaan)
+    for r in conn.execute("SELECT kunci, nilai FROM pengaturan"):
+        if r["kunci"] not in hasil:
+            continue
+        if r["nilai"] in (None, "") and r["kunci"] not in kosong_boleh:
+            continue
+        hasil[r["kunci"]] = r["nilai"] if r["nilai"] is not None else ""
+    return hasil
+
+
+def kv_simpan(conn, bawaan, nilai):
+    """Simpan kunci yang dikenal `bawaan` ke tabel `pengaturan` pada `conn`."""
+    for k, v in (nilai or {}).items():
+        if k in bawaan:
+            conn.execute("INSERT OR REPLACE INTO pengaturan (kunci, nilai) "
+                         "VALUES (?, ?)", (k, str(v).strip()))
+    conn.commit()
+
+
 def pengaturan(bawaan):
     """Nilai pengaturan ruang aktif; kunci yang belum disimpan memakai `bawaan`."""
-    hasil = dict(bawaan)
     with _lock:
-        for r in get_conn().execute("SELECT kunci, nilai FROM pengaturan"):
-            if r["kunci"] in hasil and r["nilai"] not in (None, ""):
-                hasil[r["kunci"]] = r["nilai"]
-    return hasil
+        return kv_ambil(get_conn(), bawaan)
 
 
 def simpan_pengaturan(bawaan, nilai):
     """Simpan kunci yang dikenal `bawaan`; kunci lain diabaikan."""
     with _lock:
-        conn = get_conn()
-        for k, v in (nilai or {}).items():
-            if k in bawaan:
-                conn.execute("INSERT OR REPLACE INTO pengaturan (kunci, nilai) "
-                             "VALUES (?, ?)", (k, str(v).strip()))
-        conn.commit()
+        kv_simpan(get_conn(), bawaan, nilai)
     return pengaturan(bawaan)
 
 

@@ -1,0 +1,365 @@
+{% extends "base.html" %}
+{% block title %}Buat Dokumen — LeadScraper Pro{% endblock %}
+{% block page_title %}Buat Dokumen{% endblock %}
+
+{% block content %}
+<style>
+  /* Kolom wajib ditandai bintang merah; kolom lain dikumpulkan di bagian
+     "Opsional" yang tertutup supaya form terlihat pendek. */
+  .wajib { color: #dc3545; font-weight: 700; margin-left: .15rem; }
+  .kartu-form { border: 1px solid #e3e6ef; border-radius: .6rem; background: #fff; }
+  /* Tanpa tanda ">": badan kartu "Opsional" berada di dalam .collapse, bukan
+     anak langsung .kartu-form, dan dengan selektor anak langsung isinya tidak
+     mendapat padding sama sekali sehingga menempel ke garis tepi kartu. */
+  .kartu-form .kepala { padding: .6rem .9rem; border-bottom: 1px solid #eef0f6;
+    font-weight: 600; display: flex; align-items: center; gap: .5rem; }
+  .kartu-form .isi { padding: .9rem; }
+  /* Judul kelompok di bagian Opsional diberi jarak atas supaya kelompoknya
+     terbaca terpisah tanpa perlu garis tambahan. */
+  .kartu-form .isi h6 { letter-spacing: .03em; }
+  #tabelItem { table-layout: fixed; }
+  #tabelItem td { padding: .25rem; vertical-align: top; }
+  #tabelItem th { font-size: .78rem; font-weight: 600; vertical-align: bottom; }
+  #tabelItem input, #tabelItem textarea { font-size: .85rem; padding: .25rem .4rem; }
+  /* Deskripsi tumbuh mengikuti isinya supaya spesifikasi panjang tetap terbaca. */
+  #tabelItem textarea.f-deskripsi { min-height: 2.1rem; resize: vertical; }
+  #saranPelanggan { position: absolute; z-index: 30; width: 100%; max-height: 260px;
+    overflow-y: auto; display: none; }
+  #saranPelanggan button { text-align: left; }
+  #panelRekap { position: sticky; top: 1rem; }
+  .rekap-baris { display: flex; justify-content: space-between; gap: 1rem;
+    padding: .2rem 0; font-size: .9rem; }
+  .rekap-baris.total { border-top: 2px solid #343a40; margin-top: .3rem;
+    padding-top: .4rem; font-weight: 700; }
+  .hasil-produk { max-height: 300px; overflow-y: auto; }
+</style>
+
+{% if kurang_pengaturan %}
+<div class="alert alert-warning d-flex align-items-start gap-2">
+  <i class="bi bi-exclamation-triangle-fill fs-5"></i>
+  <div>
+    <strong>Pengaturan Dokumen belum lengkap.</strong>
+    Dokumen belum bisa dibuat sebelum kolom ini diisi:
+    <strong>{{ kurang_pengaturan|join(', ') }}</strong>.
+    <a href="/dokumen" class="alert-link">Buka Pengaturan Dokumen</a>.
+  </div>
+</div>
+{% endif %}
+
+<form id="formDokumen" autocomplete="off">
+<input type="hidden" id="induk_id" value="{{ induk_id or '' }}">
+<input type="hidden" id="place_key" value="{{ awal.place_key or '' }}">
+<input type="hidden" id="ruang" value="{{ awal.ruang or '' }}">
+
+<div class="row g-3">
+  <div class="col-lg-8">
+
+    <!-- ─── Yang wajib diisi ─────────────────────────────────────────────── -->
+    <div class="kartu-form mb-3">
+      <div class="kepala"><i class="bi bi-pencil-square"></i> Isian wajib
+        <span class="text-muted fw-normal small">— hanya ini yang perlu diisi</span>
+      </div>
+      <div class="isi">
+        <div class="row g-3">
+          <div class="col-md-6">
+            <label class="form-label">Jenis dokumen<span class="wajib">*</span></label>
+            <select class="form-select" id="jenis">
+              {% for j in jenis %}
+              <option value="{{ j.kunci }}" {% if j.kunci == jenis_aktif %}selected{% endif %}>{{ j.label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-md-3">
+            <label class="form-label">Tanggal<span class="wajib">*</span></label>
+            <input type="date" class="form-control" id="tanggal" value="{{ awal.tanggal }}">
+          </div>
+          <div class="col-md-3 kolom-jenis" data-untuk="jatuh_tempo">
+            <label class="form-label">Jatuh tempo<span class="wajib">*</span></label>
+            <input type="date" class="form-control" id="jatuh_tempo" value="{{ awal.jatuh_tempo or '' }}">
+          </div>
+
+          <div class="col-md-7 position-relative">
+            <label class="form-label">Nama pelanggan / instansi<span class="wajib">*</span></label>
+            <input type="text" class="form-control" id="pelanggan_nama"
+                   value="{{ awal.pelanggan_nama or '' }}"
+                   placeholder="Ketik nama, saran muncul dari database leads">
+            <div id="saranPelanggan" class="list-group shadow-sm"></div>
+          </div>
+          <div class="col-md-5 kolom-jenis" data-untuk="perihal">
+            <label class="form-label">Perihal / Hal<span class="wajib">*</span></label>
+            <input type="text" class="form-control" id="perihal"
+                   value="{{ awal.perihal or '' }}" placeholder="mis. Lisensi CRM &amp; HRIS">
+          </div>
+
+          <div class="col-md-12 kolom-jenis" data-untuk="alamat_kirim">
+            <label class="form-label">Alamat pengiriman<span class="wajib">*</span></label>
+            <input type="text" class="form-control" id="alamat_kirim"
+                   value="{{ awal.alamat_kirim or '' }}"
+                   placeholder="Sering berbeda dari alamat penagihan">
+          </div>
+          <div class="col-md-6 kolom-jenis" data-untuk="penerima_nama">
+            <label class="form-label">Nama penerima<span class="wajib">*</span></label>
+            <input type="text" class="form-control" id="penerima_nama" value="{{ awal.penerima_nama or '' }}">
+          </div>
+          <div class="col-md-6 kolom-jenis" data-untuk="penerima_jabatan">
+            <label class="form-label">Jabatan penerima<span class="wajib">*</span></label>
+            <input type="text" class="form-control" id="penerima_jabatan" value="{{ awal.penerima_jabatan or '' }}">
+          </div>
+          <div class="col-md-5 kolom-jenis" data-untuk="jumlah_terima">
+            <label class="form-label">Jumlah yang diterima<span class="wajib">*</span></label>
+            <input type="text" class="form-control uang" id="jumlah_terima"
+                   value="{{ awal.jumlah_terima or '' }}" placeholder="Rp">
+          </div>
+          <div class="col-md-7 kolom-jenis" data-untuk="peruntukan">
+            <label class="form-label">Untuk pembayaran<span class="wajib">*</span></label>
+            <input type="text" class="form-control" id="peruntukan"
+                   value="{{ awal.peruntukan or '' }}" placeholder="mis. uang muka lisensi CRM">
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ─── Rincian item ─────────────────────────────────────────────────── -->
+    <div class="kartu-form mb-3" id="kartuItem">
+      <div class="kepala">
+        <i class="bi bi-list-ul"></i> Rincian item<span class="wajib">*</span>
+        <div class="ms-auto d-flex gap-2">
+          <button type="button" class="btn btn-sm btn-outline-primary" id="btnCariProduk">
+            <i class="bi bi-box-seam me-1"></i>Ambil dari Katalog
+          </button>
+          <button type="button" class="btn btn-sm btn-outline-secondary" id="btnBarisBaru">
+            <i class="bi bi-plus-lg me-1"></i>Baris kosong
+          </button>
+        </div>
+      </div>
+      <div class="isi p-2">
+        <table class="table table-sm mb-0" id="tabelItem">
+          <thead class="table-light">
+            <tr>
+              <th style="width:28px"></th>
+              <th style="min-width:200px">Deskripsi / Spesifikasi<span class="wajib">*</span></th>
+              <th style="width:68px">Qty<span class="wajib">*</span></th>
+              <th style="width:84px">Satuan</th>
+              <th style="width:118px" class="kolom-harga">Harga satuan<span class="wajib">*</span></th>
+              <th style="width:62px" class="kolom-harga">Disk %</th>
+              <th style="width:120px" class="kolom-barang d-none">Keterangan</th>
+              <th style="width:112px" class="text-end kolom-harga">Jumlah</th>
+              <th style="width:30px"></th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- ─── Opsional ─────────────────────────────────────────────────────── -->
+    <div class="kartu-form mb-3">
+      <div class="kepala">
+        <button class="btn btn-sm btn-link text-decoration-none p-0" type="button"
+                data-bs-toggle="collapse" data-bs-target="#bagianOpsional">
+          <i class="bi bi-chevron-down me-1"></i>Opsional
+        </button>
+        <span class="text-muted fw-normal small">— boleh dilewati semua</span>
+      </div>
+      <div class="collapse" id="bagianOpsional">
+        <div class="isi">
+          <div class="row g-3">
+            <div class="col-12"><h6 class="text-muted mb-0 small text-uppercase">Pelanggan</h6></div>
+            <div class="col-md-8">
+              <label class="form-label">Alamat</label>
+              <input type="text" class="form-control" id="pelanggan_alamat" value="{{ awal.pelanggan_alamat or '' }}">
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">Kota</label>
+              <input type="text" class="form-control" id="pelanggan_kota" value="{{ awal.pelanggan_kota or '' }}">
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">PIC</label>
+              <input type="text" class="form-control" id="pelanggan_pic" value="{{ awal.pelanggan_pic or '' }}"
+                     placeholder="Kosong → &quot;Bapak/Ibu Pimpinan&quot;">
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">Jabatan PIC</label>
+              <input type="text" class="form-control" id="pelanggan_jabatan" value="{{ awal.pelanggan_jabatan or '' }}">
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">NPWP pelanggan</label>
+              <input type="text" class="form-control" id="pelanggan_npwp" value="{{ awal.pelanggan_npwp or '' }}">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Telepon</label>
+              <input type="text" class="form-control" id="pelanggan_telepon" value="{{ awal.pelanggan_telepon or '' }}">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Email</label>
+              <input type="text" class="form-control" id="pelanggan_email" value="{{ awal.pelanggan_email or '' }}">
+            </div>
+
+            <div class="col-12 mt-3"><h6 class="text-muted mb-0 small text-uppercase">Harga &amp; pajak</h6></div>
+            <div class="col-md-5">
+              <label class="form-label">PPN</label>
+              <select class="form-select" id="ppn_mode">
+                {% for kunci, label in label_ppn.items() %}
+                <option value="{{ kunci }}" {% if kunci == awal.ppn_mode %}selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+              </select>
+              {% if atur.status_pkp != 'pkp' %}
+              <div class="form-text text-warning">
+                Status di Pengaturan masih non-PKP — PPN tidak akan dicetak.
+              </div>
+              {% endif %}
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">Diskon global (%)</label>
+              <input type="number" class="form-control" id="diskon_persen" min="0" max="100"
+                     value="{{ awal.diskon_persen or '' }}">
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">Ongkos kirim</label>
+              <input type="text" class="form-control uang" id="biaya_kirim" value="{{ awal.biaya_kirim or '' }}" placeholder="Rp">
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">Uang muka diterima</label>
+              <input type="text" class="form-control uang" id="uang_muka" value="{{ awal.uang_muka or '' }}" placeholder="Rp">
+            </div>
+
+            <div class="col-12 mt-3"><h6 class="text-muted mb-0 small text-uppercase">Ketentuan</h6></div>
+            <div class="col-md-6">
+              <label class="form-label">Termin pembayaran</label>
+              <input type="text" class="form-control" id="termin" value="{{ awal.termin or '' }}">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">Waktu pengerjaan</label>
+              <input type="text" class="form-control" id="waktu_kerja" value="{{ awal.waktu_kerja or '' }}">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">Garansi</label>
+              <input type="text" class="form-control" id="garansi" value="{{ awal.garansi or '' }}">
+            </div>
+
+            <div class="col-12 mt-3"><h6 class="text-muted mb-0 small text-uppercase">Acuan &amp; pengiriman</h6></div>
+            <div class="col-md-4">
+              <label class="form-label">Referensi permintaan</label>
+              <input type="text" class="form-control" id="referensi" value="{{ awal.referensi or '' }}"
+                     placeholder="mis. email / WhatsApp / RFQ No. ...">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">Tanggal referensi</label>
+              <input type="date" class="form-control" id="tanggal_referensi" value="{{ awal.tanggal_referensi or '' }}">
+            </div>
+            <div class="col-md-5">
+              <label class="form-label">Nomor PO / Surat Pesanan</label>
+              <input type="text" class="form-control" id="po_nomor" value="{{ awal.po_nomor or '' }}">
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">Ekspedisi</label>
+              <input type="text" class="form-control" id="ekspedisi" value="{{ awal.ekspedisi or '' }}">
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">Nomor kendaraan</label>
+              <input type="text" class="form-control" id="kendaraan" value="{{ awal.kendaraan or '' }}">
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">Pengemudi</label>
+              <input type="text" class="form-control" id="pengemudi" value="{{ awal.pengemudi or '' }}">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Acuan (PO / kontrak / SPK)</label>
+              <input type="text" class="form-control" id="acuan" value="{{ awal.acuan or '' }}">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">Nomor invoice acuan</label>
+              <input type="text" class="form-control" id="invoice_nomor" value="{{ awal.invoice_nomor or '' }}">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">Cara pembayaran</label>
+              <input type="text" class="form-control" id="cara_bayar" value="{{ awal.cara_bayar or '' }}">
+            </div>
+
+            <div class="col-12 mt-3"><h6 class="text-muted mb-0 small text-uppercase">Lain-lain</h6></div>
+            <div class="col-md-6">
+              <label class="form-label">Lampiran yang disertakan</label>
+              <input type="text" class="form-control" id="lampiran"
+                     value="{{ (awal.lampiran or [])|join(', ') }}"
+                     placeholder="Pisahkan dengan koma, mis. Company Profile">
+              <div class="form-text">Jumlahnya ikut tercetak di baris "Lampiran".</div>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label">Catatan tambahan</label>
+              <textarea class="form-control" id="catatan" rows="2">{{ awal.catatan or '' }}</textarea>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ─── Panel rekap ────────────────────────────────────────────────────── -->
+  <div class="col-lg-4">
+    <div id="panelRekap">
+      <div class="kartu-form mb-3">
+        <div class="kepala"><i class="bi bi-calculator"></i> Rekap</div>
+        <div class="isi">
+          <div id="isiRekap" class="text-muted small">Isi rincian item dulu.</div>
+          <div id="terbilang" class="small fst-italic text-muted mt-2"></div>
+        </div>
+      </div>
+      <div class="d-grid gap-2">
+        <button type="button" class="btn btn-primary btn-lg" id="btnBuat"
+                {% if kurang_pengaturan %}disabled{% endif %}>
+          <i class="bi bi-file-earmark-pdf me-1"></i>Buat Dokumen (PDF + Word)
+        </button>
+        <a href="/dokumen" class="btn btn-outline-secondary">Riwayat dokumen</a>
+      </div>
+      <div id="pesanForm" class="mt-3"></div>
+    </div>
+  </div>
+</div>
+</form>
+
+<!-- Modal katalog produk -->
+<div class="modal fade" id="modalProduk" tabindex="-1">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="bi bi-box-seam me-2"></i>Ambil dari Katalog</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="row g-2 mb-2">
+          <div class="col-8">
+            <input type="text" class="form-control" id="cariProduk" placeholder="Cari produk...">
+          </div>
+          <div class="col-4">
+            <select class="form-select" id="filterKategori">
+              <option value="">Semua kategori</option>
+              {% for k in kategori %}<option value="{{ k }}">{{ k }}</option>{% endfor %}
+            </select>
+          </div>
+        </div>
+        {% if paket %}
+        <div class="mb-2">
+          <div class="small text-muted mb-1">Paket siap pakai:</div>
+          {% for p in paket %}
+          <button type="button" class="btn btn-sm btn-outline-success me-1 mb-1 btn-paket"
+                  data-items="{{ p['items']|tojson|forceescape }}">{{ p.nama }}</button>
+          {% endfor %}
+        </div>
+        {% endif %}
+        <div id="hasilProduk" class="list-group hasil-produk"></div>
+        <div class="form-text mt-2">
+          Katalog kosong? <a href="/dokumen/produk">Tambah atau impor produk</a> dulu.
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+  window.DOK_JENIS = {{ jenis|tojson }};
+  window.DOK_AWAL_ITEM = {{ (awal.item or [])|tojson }};
+</script>
+<script src="/static/js/dokumen.js"></script>
+{% endblock %}

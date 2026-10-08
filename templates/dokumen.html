@@ -1,0 +1,390 @@
+{% extends "base.html" %}
+{% block title %}Riwayat Dokumen — LeadScraper Pro{% endblock %}
+{% block page_title %}Riwayat Dokumen{% endblock %}
+
+{% block content %}
+<style>
+  .wajib { color: #dc3545; font-weight: 700; margin-left: .15rem; }
+  .kotak-stat { background: #fff; border: 1px solid #e3e6ef; border-radius: .6rem;
+    padding: .7rem .9rem; }
+  .kotak-stat .angka { font-size: 1.35rem; font-weight: 700; line-height: 1.1; }
+</style>
+
+{% if kurang_pengaturan %}
+<div class="alert alert-warning d-flex align-items-start gap-2">
+  <i class="bi bi-exclamation-triangle-fill fs-5"></i>
+  <div>
+    <strong>Pengaturan Dokumen belum lengkap.</strong>
+    Dokumen belum bisa dibuat sebelum kolom ini diisi:
+    <strong>{{ kurang_pengaturan|join(', ') }}</strong>.
+    <button class="btn btn-sm btn-warning ms-2" onclick="Pengaturan.buka()">Isi sekarang</button>
+  </div>
+</div>
+{% endif %}
+
+<div class="row g-3 mb-3">
+  <div class="col-sm-4"><div class="kotak-stat">
+    <div class="angka">{{ stats.dokumen }}</div>
+    <small class="text-muted">dokumen dibuat</small></div></div>
+  <div class="col-sm-4"><div class="kotak-stat">
+    <div class="angka">{{ stats.produk }}</div>
+    <small class="text-muted">produk di katalog</small></div></div>
+  <div class="col-sm-4"><div class="kotak-stat">
+    <div class="angka">{{ stats.pelanggan }}</div>
+    <small class="text-muted">pelanggan tersimpan</small></div></div>
+</div>
+
+<div class="d-flex flex-wrap gap-2 align-items-end mb-3">
+  <a href="/dokumen/baru" class="btn btn-primary">
+    <i class="bi bi-file-earmark-plus me-1"></i>Buat Dokumen
+  </a>
+  <a href="/dokumen/produk" class="btn btn-outline-secondary">
+    <i class="bi bi-box-seam me-1"></i>Katalog Produk
+  </a>
+  <button class="btn btn-outline-secondary" onclick="Pengaturan.buka()">
+    <i class="bi bi-gear me-1"></i>Pengaturan Dokumen
+  </button>
+  <form method="get" class="d-flex gap-2 ms-auto">
+    <select name="jenis" class="form-select form-select-sm" style="width:auto">
+      <option value="">Semua jenis</option>
+      {% for j in jenis %}
+      <option value="{{ j.kunci }}" {% if j.kunci == filter_jenis %}selected{% endif %}>{{ j.label }}</option>
+      {% endfor %}
+    </select>
+    <input type="text" name="q" class="form-control form-control-sm" style="width:200px"
+           value="{{ q }}" placeholder="Cari nomor / pelanggan">
+    <button class="btn btn-sm btn-outline-primary">Cari</button>
+  </form>
+</div>
+
+<div class="card">
+  <div class="card-body p-0">
+    {% if dokumen %}
+    <div class="table-responsive">
+      <table class="table table-sm table-hover mb-0 align-middle">
+        <thead class="table-light">
+          <tr>
+            <th>Nomor</th><th>Jenis</th><th>Tanggal</th><th>Pelanggan</th>
+            <th>Perihal</th><th class="text-end">Total</th><th>Berkas</th><th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for d in dokumen %}
+          <tr data-id="{{ d.id }}" data-nomor="{{ d.nomor }}">
+            <td class="text-nowrap"><code>{{ d.nomor }}</code>
+              {% if d.revisi %}<span class="badge bg-warning text-dark">R{{ d.revisi }}</span>{% endif %}
+            </td>
+            <td class="text-nowrap small">{{ d.jenis_label }}</td>
+            <td class="text-nowrap small">{{ d.tanggal }}</td>
+            <td class="small">{{ d.pelanggan_nama }}</td>
+            <td class="small text-muted">{{ d.perihal }}</td>
+            <td class="text-end text-nowrap small">
+              {% if d.total %}Rp {{ '{:,}'.format(d.total).replace(',', '.') }}{% else %}—{% endif %}
+            </td>
+            <td class="text-nowrap">
+              {% if d.pdf %}
+              <a href="/dokumen/berkas/{{ d.pdf }}" class="btn btn-sm btn-outline-danger py-0"
+                 title="Unduh PDF"><i class="bi bi-file-earmark-pdf"></i></a>
+              <a href="/dokumen/berkas/{{ d.pdf }}?lihat=1" target="_blank"
+                 class="btn btn-sm btn-outline-secondary py-0" title="Lihat PDF"><i class="bi bi-eye"></i></a>
+              {% endif %}
+              {% if d.docx %}
+              <a href="/dokumen/berkas/{{ d.docx }}" class="btn btn-sm btn-outline-primary py-0"
+                 title="Unduh Word"><i class="bi bi-file-earmark-word"></i></a>
+              {% endif %}
+            </td>
+            <td class="text-nowrap">
+              <a href="/dokumen/baru?duplikat={{ d.id }}&jenis={{ d.jenis }}"
+                 class="btn btn-sm btn-outline-success py-0" title="Buat lagi dengan data yang sama">
+                <i class="bi bi-files"></i> Duplikat</a>
+              <a href="/dokumen/baru?revisi={{ d.id }}&jenis={{ d.jenis }}"
+                 class="btn btn-sm btn-outline-warning py-0" title="Revisi: nomor dapat akhiran -R">
+                <i class="bi bi-arrow-repeat"></i> Revisi</a>
+              <button class="btn btn-sm btn-outline-danger py-0 btn-hapus-dok" title="Hapus catatan">
+                <i class="bi bi-trash"></i></button>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <div class="p-2 text-muted small border-top">{{ total }} dokumen</div>
+    {% else %}
+    <div class="p-4 text-center text-muted">
+      <i class="bi bi-folder2-open fs-1 d-block mb-2"></i>
+      Belum ada dokumen. <a href="/dokumen/baru">Buat yang pertama</a>.
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+<!-- ─── Modal Pengaturan ─────────────────────────────────────────────────── -->
+<div class="modal fade" id="modalPengaturan" tabindex="-1">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="bi bi-gear me-2"></i>Pengaturan Dokumen</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <p class="text-muted small">
+          Diisi sekali saja. Kolom bertanda <span class="wajib">*</span> wajib —
+          dokumen tidak bisa dibuat sebelum semuanya terisi.
+        </p>
+
+        <h6 class="text-uppercase small text-muted">Identitas penerbit</h6>
+        <div class="row g-2 mb-3">
+          <div class="col-md-8">
+            <label class="form-label small">Nama badan usaha<span class="wajib">*</span></label>
+            <input class="form-control form-control-sm" data-atur="nama_usaha">
+          </div>
+          <div class="col-md-4">
+            <label class="form-label small">Kota penerbitan surat<span class="wajib">*</span></label>
+            <input class="form-control form-control-sm" data-atur="kota_surat">
+          </div>
+          <div class="col-12">
+            <label class="form-label small">Alamat lengkap<span class="wajib">*</span></label>
+            <input class="form-control form-control-sm" data-atur="alamat"
+                   placeholder="Termasuk nomor lantai dan nama jalan">
+          </div>
+          <div class="col-md-4">
+            <label class="form-label small">Telepon / WA kantor<span class="wajib">*</span></label>
+            <input class="form-control form-control-sm" data-atur="telepon">
+          </div>
+          <div class="col-md-4">
+            <label class="form-label small">Email kantor<span class="wajib">*</span></label>
+            <input class="form-control form-control-sm" data-atur="email">
+          </div>
+          <div class="col-md-4">
+            <label class="form-label small">Status pajak<span class="wajib">*</span></label>
+            <select class="form-select form-select-sm" data-atur="status_pkp">
+              <option value="non-pkp">Non-PKP (tidak memungut PPN)</option>
+              <option value="pkp">PKP (memungut PPN)</option>
+            </select>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label small">NPWP <span class="text-muted">(wajib bila PKP)</span></label>
+            <input class="form-control form-control-sm" data-atur="npwp">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label small">Website <span class="text-muted">(opsional)</span></label>
+            <input class="form-control form-control-sm" data-atur="website">
+          </div>
+        </div>
+
+        <h6 class="text-uppercase small text-muted">Pembayaran</h6>
+        <div class="row g-2 mb-3">
+          <div class="col-md-3">
+            <label class="form-label small">Bank<span class="wajib">*</span></label>
+            <input class="form-control form-control-sm" data-atur="bank">
+          </div>
+          <div class="col-md-4">
+            <label class="form-label small">Nomor rekening<span class="wajib">*</span></label>
+            <input class="form-control form-control-sm" data-atur="rekening">
+          </div>
+          <div class="col-md-5">
+            <label class="form-label small">Atas nama<span class="wajib">*</span></label>
+            <input class="form-control form-control-sm" data-atur="rekening_atas_nama"
+                   placeholder="Harus nama badan usaha, bukan pribadi">
+          </div>
+          <div class="col-12">
+            <div class="form-text">Wajib untuk Invoice dan Kwitansi.</div>
+          </div>
+        </div>
+
+        <h6 class="text-uppercase small text-muted">Penanda tangan</h6>
+        <div class="row g-2 mb-3">
+          <div class="col-md-6">
+            <label class="form-label small">Nama<span class="wajib">*</span></label>
+            <input class="form-control form-control-sm" data-atur="penanda_nama">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label small">Jabatan<span class="wajib">*</span></label>
+            <input class="form-control form-control-sm" data-atur="penanda_jabatan">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label small">WhatsApp <span class="text-muted">(opsional)</span></label>
+            <input class="form-control form-control-sm" data-atur="penanda_wa">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label small">Email langsung <span class="text-muted">(opsional)</span></label>
+            <input class="form-control form-control-sm" data-atur="penanda_email">
+          </div>
+        </div>
+
+        <div class="accordion" id="akordeonAtur">
+          <div class="accordion-item">
+            <h2 class="accordion-header">
+              <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse"
+                      data-bs-target="#aturBawaan">Nilai bawaan dokumen (opsional)</button>
+            </h2>
+            <div id="aturBawaan" class="accordion-collapse collapse" data-bs-parent="#akordeonAtur">
+              <div class="accordion-body row g-2">
+                <div class="col-md-6">
+                  <label class="form-label small">PPN bawaan</label>
+                  <select class="form-select form-select-sm" data-atur="ppn_mode">
+                    {% for kunci, label in label_ppn.items() %}
+                    <option value="{{ kunci }}">{{ label }}</option>
+                    {% endfor %}
+                  </select>
+                </div>
+                <div class="col-md-3">
+                  <label class="form-label small">Masa berlaku (hari)</label>
+                  <input type="number" class="form-control form-control-sm" data-atur="berlaku_hari">
+                </div>
+                <div class="col-md-3">
+                  <label class="form-label small">Jatuh tempo invoice (hari)</label>
+                  <input type="number" class="form-control form-control-sm" data-atur="tempo_hari">
+                </div>
+                <div class="col-md-6">
+                  <label class="form-label small">Termin pembayaran</label>
+                  <input class="form-control form-control-sm" data-atur="termin">
+                </div>
+                <div class="col-md-3">
+                  <label class="form-label small">Waktu pengerjaan</label>
+                  <input class="form-control form-control-sm" data-atur="waktu_kerja">
+                </div>
+                <div class="col-md-3">
+                  <label class="form-label small">Garansi</label>
+                  <input class="form-control form-control-sm" data-atur="garansi">
+                </div>
+                <div class="col-md-6">
+                  <label class="form-label small">SLA balas revisi</label>
+                  <input class="form-control form-control-sm" data-atur="sla">
+                </div>
+                <div class="col-md-6">
+                  <label class="form-label small">Catatan footer</label>
+                  <input class="form-control form-control-sm" data-atur="catatan_footer">
+                </div>
+                <div class="col-12">
+                  <label class="form-label small">Satu kalimat profil usaha (untuk proposal)</label>
+                  <textarea class="form-control form-control-sm" rows="2" data-atur="profil_usaha"></textarea>
+                </div>
+                <div class="col-md-6">
+                  <label class="form-label small">NIB / izin usaha</label>
+                  <input class="form-control form-control-sm" data-atur="nib">
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="accordion-item">
+            <h2 class="accordion-header">
+              <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse"
+                      data-bs-target="#aturNomor">Pola nomor surat (opsional)</button>
+            </h2>
+            <div id="aturNomor" class="accordion-collapse collapse" data-bs-parent="#akordeonAtur">
+              <div class="accordion-body">
+                <p class="small text-muted">
+                  Penanda yang bisa dipakai: <code>{urut}</code> <code>{hari}</code>
+                  <code>{bulan}</code> <code>{tahun}</code> <code>{romawi}</code>.
+                  Nomor surat urut per bulan; invoice, kwitansi, surat jalan, dan BAST
+                  urut per tahun supaya nomornya tidak pernah terulang.
+                </p>
+                <div class="row g-2">
+                  {% for j in jenis %}
+                  <div class="col-md-6">
+                    <label class="form-label small">{{ j.label }}</label>
+                    <input class="form-control form-control-sm" data-atur="pola_nomor_{{ j.kunci }}">
+                  </div>
+                  {% endfor %}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="accordion-item">
+            <h2 class="accordion-header">
+              <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse"
+                      data-bs-target="#aturTeks">Kalimat surat (opsional)</button>
+            </h2>
+            <div id="aturTeks" class="accordion-collapse collapse" data-bs-parent="#akordeonAtur">
+              <div class="accordion-body">
+                <p class="small text-muted">
+                  Semua kalimat baku yang dipakai di dokumen. Penanda dalam kurung
+                  kurawal diganti otomatis; biarkan apa adanya kalau tidak paham.
+                </p>
+                {% for kunci in teks_bawaan|sort %}
+                <div class="mb-2">
+                  <label class="form-label small text-muted">{{ kunci.replace('teks_', '').replace('_', ' ') }}</label>
+                  <textarea class="form-control form-control-sm" rows="2" data-atur="{{ kunci }}"></textarea>
+                </div>
+                {% endfor %}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div id="pesanAtur" class="mt-3"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-outline-secondary" data-bs-dismiss="modal">Tutup</button>
+        <button class="btn btn-primary" onclick="Pengaturan.simpan()">Simpan</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// ─── Pengaturan dokumen ───────────────────────────────────────────────────────
+const Pengaturan = (() => {
+  let modal = null;
+
+  function kolom() { return document.querySelectorAll('[data-atur]'); }
+
+  async function buka() {
+    modal = modal || new bootstrap.Modal(document.getElementById('modalPengaturan'));
+    modal.show();
+    const d = await (await fetch('/dokumen/pengaturan')).json();
+    if (!d.ok) return;
+    kolom().forEach((n) => {
+      const nilai = d.atur[n.dataset.atur];
+      if (nilai !== undefined && nilai !== null) n.value = nilai;
+    });
+  }
+
+  async function simpan() {
+    const muatan = {};
+    kolom().forEach((n) => { muatan[n.dataset.atur] = n.value; });
+    const pesan = document.getElementById('pesanAtur');
+    const d = await (await fetch('/dokumen/pengaturan', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(muatan),
+    })).json();
+    if (!d.ok) {
+      pesan.innerHTML = `<div class="alert alert-danger py-2 small mb-0">${escapeHtml(d.error || 'Gagal menyimpan')}</div>`;
+      return;
+    }
+    if (d.kurang.length) {
+      pesan.innerHTML = `<div class="alert alert-warning py-2 small mb-0">
+        Tersimpan, tapi masih kosong: <strong>${escapeHtml(d.kurang.join(', '))}</strong>.
+        Dokumen belum bisa dibuat sebelum ini terisi.</div>`;
+      return;
+    }
+    pesan.innerHTML = '<div class="alert alert-success py-2 small mb-0">Tersimpan. '
+      + 'Dokumen sudah bisa dibuat.</div>';
+    setTimeout(() => window.location.reload(), 900);
+  }
+
+  return { buka, simpan };
+})();
+
+// ─── Hapus catatan dokumen ────────────────────────────────────────────────────
+document.querySelectorAll('.btn-hapus-dok').forEach((b) => {
+  b.addEventListener('click', async () => {
+    const tr = b.closest('tr');
+    if (!confirm(`Hapus catatan dokumen ${tr.dataset.nomor}?\n\n`
+      + 'Berkas DOCX/PDF-nya tetap ada di folder output. Nomor ini tidak akan '
+      + 'dipakai ulang oleh dokumen lain.')) return;
+    const d = await (await fetch('/dokumen/hapus', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: tr.dataset.id }),
+    })).json();
+    if (d.ok) tr.remove();
+    else alert(d.error || 'Gagal menghapus');
+  });
+});
+</script>
+{% endblock %}

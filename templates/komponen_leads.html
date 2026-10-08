@@ -252,6 +252,11 @@
             <button class="btn btn-outline-primary btn-sm mb-1 btn-email" title="Template email & WhatsApp siap salin">
               <i class="bi bi-envelope-paper"></i> Email/WA
             </button>
+            <a href="/dokumen/baru?place_key={{ l.place_key|urlencode }}&ruang=komponen"
+               class="btn btn-outline-success btn-sm mb-1"
+               title="Buat surat penawaran / invoice ber-kop NXTG dengan data lead ini">
+              <i class="bi bi-file-earmark-pdf"></i> Dokumen
+            </a>
             {% if l.source_url and l.source_url.startswith('http') %}
             <a href="{{ l.source_url }}" target="_blank" class="btn btn-outline-secondary btn-sm mb-1" title="Buka di Google Maps">
               <i class="bi bi-geo-alt"></i></a>

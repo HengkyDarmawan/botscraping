@@ -45,6 +45,16 @@
     <a href="/pricing" class="nav-item {% if request.path == '/pricing' %}active{% endif %}">
       <i class="bi bi-tags-fill"></i> Price Comparison
     </a>
+    <div class="nav-section">DOKUMEN &amp; SURAT</div>
+    <a href="/dokumen/baru" class="nav-item {% if request.path == '/dokumen/baru' %}active{% endif %}">
+      <i class="bi bi-file-earmark-plus-fill"></i> Buat Dokumen
+    </a>
+    <a href="/dokumen" class="nav-item {% if request.path == '/dokumen' %}active{% endif %}">
+      <i class="bi bi-folder2-open"></i> Riwayat Dokumen
+    </a>
+    <a href="/dokumen/produk" class="nav-item {% if request.path == '/dokumen/produk' %}active{% endif %}">
+      <i class="bi bi-box-seam"></i> Katalog Produk
+    </a>
     <div class="nav-section">DATA</div>
     <a href="/results" class="nav-item {% if request.path == '/results' %}active{% endif %}">
       <i class="bi bi-table"></i> Hasil & Download
